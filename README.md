@@ -46,4 +46,14 @@ Use spatial transcriptomic data as input (matrix dimension: spot by gene), use t
 - semi-supervised learning
 - image super-resolution
 
+## Installation
+```bash
+# install
+python setup.py install --user
 
+# uninstall
+pip uninstall bcvae
+
+# re-install
+./reinstall.sh
+```
