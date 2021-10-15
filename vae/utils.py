@@ -200,6 +200,26 @@ def calc_r2(x, y):
     return r2
 
 
+# Reference:
+# https://math.stackexchange.com/questions/1392491/measure-of-how-much-diagonal-a-matrix-is
+def calc_diag(A, eps=1e-10):
+    """Measure how diagonal a correlation matrix by calculating pearson corr. coeff. between row & col."""
+    d = len(A)
+    j = np.ones(d)
+    r = np.arange(d) + 1
+    r2 = r ** 2
+
+    n = j.dot(A).dot(j.T)
+    x_sum = r.dot(A).dot(j.T)
+    y_sum = j.dot(A).dot(r.T)
+    x2_sum = r2.dot(A).dot(j.T)
+    y2_sum = j.dot(A).dot(r2.T)
+    xy_sum = r.dot(A).dot(r.T)
+    score = (n * xy_sum - x_sum * y_sum) / (np.sqrt(n * x2_sum - x_sum ** 2) * np.sqrt(n * y2_sum - y_sum ** 2) + eps)
+
+    return score
+
+
 def calc_corr_gsva(z, spots, df_gsva):
     """Calculate correlation between VAE latent space (z) & GSVA score of selected spots"""
     df_z = pd.DataFrame(
@@ -259,9 +279,28 @@ def train(model,
     """
     Parameters
     ----------
+    model : SignatureVAE
+        VAE model with signature priors
+
+    adata_train : AnnData
+        Spot x Gene expression matrix with subset of Union(hv_genes, marker_genes), [S x G']
+        hv_genes: highly variable genes
+        marker_genes: list of genes in signature gene set
+
+    df_gsva_train : pd.DataFrame
+        Spot x Signatures discretized GSVA score for training, [S x D]
+
+    pseudo_spots : list
+        List of signature-specific peripheral (pseudo) spots close to the purest spots representing each signature
+
     alpha : float
         weight to adjust loss calculation between (NLL+KL divergence) &
         signature loss during training
+
+    Returns
+    -------
+    losses : list
+        Log of loss values during training
     """
     x_sample = torch.Tensor(adata_train[pseudo_spots, :].X.A)
     gsva_sig = torch.Tensor(df_gsva_train.loc[pseudo_spots, :].to_numpy())
@@ -318,13 +357,6 @@ def run_one_epoch(model,
                   optimizer=None,
                   device=torch.device('cuda')
                   ):
-    """
-    Parameters
-    ----------
-    alpha : float
-        weight to adjust loss calculation between (NLL+KL divergence) &
-        signature loss during training
-    """
     assert optimizer is not None and gsva_sig is not None and alpha is not None, \
         "Must declare optimizer and loss weight (alpha) for training"
     if not next(model.parameters()).is_cuda:

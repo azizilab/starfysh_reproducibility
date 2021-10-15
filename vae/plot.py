@@ -7,7 +7,7 @@ import scanpy as sc
 
 from scipy.stats import gaussian_kde
 
-from .utils import calc_r2, get_marker_genes
+from .utils import calc_r2, calc_diag, get_marker_genes
 
 
 def _get_color_names(size=10):
@@ -26,7 +26,7 @@ def display_reconst(df_true,
                     marker_genes=None,
                     sample_rate=0.1,
                     size=(20, 20),
-                    spot_size=30,
+                    spot_size=15,
                     title=None
                     ):
     """
@@ -38,7 +38,7 @@ def display_reconst(df_true,
     if marker_genes is not None:
         marker_genes = set(marker_genes)
 
-    df_true_sample = df_true.sample(frac=sample_rate)
+    df_true_sample = df_true.sample(frac=sample_rate, random_state=0)
     df_pred_sample = df_pred.loc[df_true_sample.index]
 
     plt.rcParams["figure.figsize"] = size
@@ -56,7 +56,7 @@ def display_reconst(df_true,
                 gexp_stacked = np.vstack([df_true_sample[gene].values, df_pred_sample[gene].values])
 
                 z = gaussian_kde(gexp_stacked)(gexp_stacked)
-                ax.scatter(gene_true, gene_pred, c=z, s=spot_size)
+                ax.scatter(gene_true, gene_pred, c=z, s=spot_size, alpha=0.5)
             except np.linalg.LinAlgError as e:
                 pass
 
@@ -67,10 +67,10 @@ def display_reconst(df_true,
         )(df_true_sample.columns)
         colors = np.repeat(gene_colors, df_true_sample.shape[0])
 
-        ax.scatter(xx, yy, c=colors, s=spot_size)
+        ax.scatter(xx, yy, c=colors, s=spot_size, alpha=0.5)
 
     else:
-        ax.scatter(xx, yy, s=spot_size)
+        ax.scatter(xx, yy, s=spot_size, alpha=0.5)
 
     plt.suptitle(title)
     plt.xlabel('Ground-truth')
@@ -97,14 +97,18 @@ def display_gexp_var(var_true, var_pred, title):
 def display_corr_gsva(df_corr,
                       title,
                       cluster=False,
+                      diag=False,
                       size=(12, 20)
                       ):
     """
     Correlation heatmap - Bottle-neck (latent) values vs. GSVA score
     """
-    # Performance metrics
-    trace = np.trace(df_corr)
-    metrics = str(round(trace / len(df_corr), 2))
+    # Performance metrics (trace / n_factors) or diagonalizedness measurement
+    if diag:
+        metrics = str(round(calc_diag(df_corr.to_numpy()), 2))
+    else:
+        trace = np.trace(df_corr)
+        metrics = str(round(trace / len(df_corr), 2))
 
     # Plotting specs
     sns.set(font_scale=1.5)
