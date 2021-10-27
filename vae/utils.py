@@ -200,22 +200,21 @@ def calc_r2(x, y):
     return r2
 
 
-# Reference:
-# https://math.stackexchange.com/questions/1392491/measure-of-how-much-diagonal-a-matrix-is
-def calc_diag(A, eps=1e-10):
-    """Measure how diagonal a correlation matrix by calculating pearson corr. coeff. between row & col."""
-    d = len(A)
-    j = np.ones(d)
-    r = np.arange(d) + 1
-    r2 = r ** 2
-
-    n = j.dot(A).dot(j.T)
-    x_sum = r.dot(A).dot(j.T)
-    y_sum = j.dot(A).dot(r.T)
-    x2_sum = r2.dot(A).dot(j.T)
-    y2_sum = j.dot(A).dot(r2.T)
-    xy_sum = r.dot(A).dot(r.T)
-    score = (n * xy_sum - x_sum * y_sum) / (np.sqrt(n * x2_sum - x_sum ** 2) * np.sqrt(n * y2_sum - y_sum ** 2) + eps)
+def calc_diag_score(A, metric='f1', eps=1e-10):
+    """
+    Measure accuracy (how diagonal) a correlation matrix is
+    Metrics:
+     - F1 score: TP / (TP + 1/2(FP + FN))
+     - Acc: (TP + TN) / (TP + FP + TN + FN)
+    """
+    assert metric == 'acc' or metric == 'f1', "Please choose metric from acc & f1-score"
+    A = np.asarray(A)
+    if metric == 'f1':
+        tp = np.trace(A)
+        fp_fn = A.sum() - tp
+        score = tp / (tp + 0.5 * fp_fn + eps)
+    else:
+        score = np.trace(A) / (A.sum() + eps)
 
     return score
 

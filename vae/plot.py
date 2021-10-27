@@ -7,7 +7,7 @@ import scanpy as sc
 
 from scipy.stats import gaussian_kde
 
-from .utils import calc_r2, calc_diag, get_marker_genes
+from .utils import calc_r2, calc_diag_score, get_marker_genes
 
 
 def _get_color_names(size=10):
@@ -95,20 +95,33 @@ def display_gexp_var(var_true, var_pred, title):
 
 
 def display_corr_gsva(df_corr,
-                      title,
                       cluster=False,
-                      diag=False,
+                      metric='f1',
+                      title=None,
                       size=(12, 20)
                       ):
     """
     Correlation heatmap - Bottle-neck (latent) values vs. GSVA score
+
+    Parameters
+    ----------
+    df_corr : pd.DataFrame
+        DataFrame of correlation between factors & learnt latent variable
+
+    cluster : bool [default=False]
+        Whether perform hierarchical clustering on axes
+
+    metric : str
+        Metric to evaluate goodness of correlation matrix
+        'f1': F-1 score; 'acc': (TP+TN) / (TP+FP+TN+FN)
+        Otherwise calculate trace(matrix) / # factors
     """
     # Performance metrics (trace / n_factors) or diagonalizedness measurement
-    if diag:
-        metrics = str(round(calc_diag(df_corr.to_numpy()), 2))
+    if metric == 'f1' or metric == 'acc':
+        score = str(round(calc_diag_score(df_corr.to_numpy(), metric=metric), 2))
     else:
         trace = np.trace(df_corr)
-        metrics = str(round(trace / len(df_corr), 2))
+        score = str(round(trace / len(df_corr), 2))
 
     # Plotting specs
     sns.set(font_scale=1.5)
@@ -123,7 +136,7 @@ def display_corr_gsva(df_corr,
     ax.set_xticklabels(df_corr.columns)
     ax.set_yticklabels(df_corr.index)
 
-    plt.suptitle(title + '; Acc={}'.format(metrics))
+    plt.suptitle(title + '; Acc={}'.format(score))
     plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
     plt.show()
 
