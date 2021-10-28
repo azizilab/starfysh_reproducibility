@@ -44,7 +44,6 @@ def display_reconst(df_true,
     plt.rcParams["figure.figsize"] = size
     ax = plt.gca()
 
-    # try pre-compute metrics to avoid for-loop throughout scatter plot
     xx = df_true_sample.T.to_numpy().flatten()
     yy = df_pred_sample.T.to_numpy().flatten()
 
@@ -72,6 +71,11 @@ def display_reconst(df_true,
     else:
         ax.scatter(xx, yy, s=spot_size, alpha=0.5)
 
+    min_val = min(xx.min(), yy.min())
+    max_val = max(xx.max(), yy.max())
+    ax.set_xlim(min_val, max_val)
+    ax.set_ylim(min_val, max_val)
+
     plt.suptitle(title)
     plt.xlabel('Ground-truth')
     plt.ylabel('Reconstructed')
@@ -96,7 +100,6 @@ def display_gexp_var(var_true, var_pred, title):
 
 def display_corr_gsva(df_corr,
                       cluster=False,
-                      metric='f1',
                       title=None,
                       size=(12, 20)
                       ):
@@ -110,18 +113,9 @@ def display_corr_gsva(df_corr,
 
     cluster : bool [default=False]
         Whether perform hierarchical clustering on axes
-
-    metric : str
-        Metric to evaluate goodness of correlation matrix
-        'f1': F-1 score; 'acc': (TP+TN) / (TP+FP+TN+FN)
-        Otherwise calculate trace(matrix) / # factors
     """
-    # Performance metrics (trace / n_factors) or diagonalizedness measurement
-    if metric == 'f1' or metric == 'acc':
-        score = str(round(calc_diag_score(df_corr.to_numpy(), metric=metric), 2))
-    else:
-        trace = np.trace(df_corr)
-        score = str(round(trace / len(df_corr), 2))
+    # Performance metrics: F1-score as diagonalizedness measurement
+    score = str(round(calc_diag_score(df_corr), 2))
 
     # Plotting specs
     sns.set(font_scale=1.5)
@@ -136,7 +130,7 @@ def display_corr_gsva(df_corr,
     ax.set_xticklabels(df_corr.columns)
     ax.set_yticklabels(df_corr.index)
 
-    plt.suptitle(title + '; Acc={}'.format(score))
+    plt.suptitle(title + '; F1-score={}'.format(score))
     plt.setp(ax.get_xticklabels(), rotation=45, ha='right', rotation_mode='anchor')
     plt.show()
 
@@ -167,7 +161,8 @@ def display_sig_gexp(adata, df_gsva, sig_genes_dict, vmin=0, vmax=3, cmap='seism
     signatures = df_gsva.columns
     for sig in signatures:
         key = sig + '_gexp'
-        avg_gexp = adata[:, filtered_sig_genes_dict[sig]].X.A.mean(axis=1)
+        adata_gexp = adata[:, filtered_sig_genes_dict[sig]]
+        avg_gexp = adata_gexp.X.mean(axis=1) if (adata_gexp.X, np.ndarray) else adata_gexp.X.A.mean(axis=1)
         adata[key] = avg_gexp
 
     sc.set_figure_params(scanpy=True, fontsize=14)

@@ -9,7 +9,7 @@ class VisiumDataset(Dataset):
     def __init__(self, adata):
         spots = adata.obs_names
         genes = adata.var_names
-        x = adata.X.A
+        x = adata.X if isinstance(adata.X, np.ndarray) else adata.X.A
 
         self.expr_mat = pd.DataFrame(x, index=spots, columns=genes)
 

@@ -26,5 +26,6 @@ env/
 /venv/
 
 # Others
+.csv
 .idea
 .ipynb_checkpoints

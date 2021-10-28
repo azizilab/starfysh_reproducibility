@@ -31,23 +31,13 @@ if (!dir.exists(opt$out)) {
 
 cat("Loading expression & signature files...\n")
 exp_df <- read.csv(opt$exp, row.names = 1)
-# exp_df = read.csv('~/Downloads/bc_visium_mod/exp_markers_df_gsva_pbmc_x.csv',row.names = 1)
-# exp_df[1:4,1:4]
 
-sigfile <- read.csv(opt$sig, header = T)
-# sigfile = read.csv('~/Downloads/bc_visium_mod/pbmc_markers_gsva_mod.csv',header=T)
-sigfile$Cell.type = as.character(sigfile$Cell.type)
-sigfile$Symbol = as.character(sigfile$Symbol)
+gene_sig <- read.csv(opt$sig, header = T)
+gs_celltype <- as.list(gene_sig)
+gs_celltype <- lapply(gs_celltype, function(x) x[nzchar(x)])
 
-#cat("Cell types in signature file:\n")
-table(sigfile$Cell.type)
-
-genelist = split(as.character(sigfile[,2]),as.character(sigfile[,1]))
-
-gsva_scores = gsva(t(exp_df),genelist,method="ssgsea")
-gsva_scores = gsva(t(exp_df),genelist,method="gsva")
-# heatmap(gsva_scores)
+gsva_scores <- gsva(t(exp_df), gs_celltype, method  = "gsva")
 # heatmap(gsva_scores)
 
+# Write to output
 write.csv(t(gsva_scores), file = paste0(opt$out, opt$name))
-# write.csv(t(gsva_scores), file = '~/Downloads/bc_visium_mod/markers_gsva_pbmc_x.csv')

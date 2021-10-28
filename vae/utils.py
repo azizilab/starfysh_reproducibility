@@ -122,7 +122,8 @@ def find_spots(adata, df_gsva, n_nbrs=30):
     assert 'highly_variable' in adata.var_keys(), "Please find highly variable genes first!"
 
     # Calculate distance with only highly variable genes
-    embedding = adata[:, adata.var['highly_variable']].X.A
+    adata_hvgs = adata[:, adata.var['highly_variable']]
+    embedding = adata_hvgs.X if isinstance(adata_hvgs.X, np.ndarray) else adata_hvgs.X.A
     pure_idxs = np.argmax(df_gsva.values, axis=0)
     pure_spots = df_gsva.idxmax(axis=0)
 
@@ -200,21 +201,16 @@ def calc_r2(x, y):
     return r2
 
 
-def calc_diag_score(A, metric='f1', eps=1e-10):
+def calc_diag_score(A, eps=1e-10):
     """
     Measure accuracy (how diagonal) a correlation matrix is
     Metrics:
      - F1 score: TP / (TP + 1/2(FP + FN))
-     - Acc: (TP + TN) / (TP + FP + TN + FN)
     """
-    assert metric == 'acc' or metric == 'f1', "Please choose metric from acc & f1-score"
     A = np.asarray(A)
-    if metric == 'f1':
-        tp = np.trace(A)
-        fp_fn = A.sum() - tp
-        score = tp / (tp + 0.5 * fp_fn + eps)
-    else:
-        score = np.trace(A) / (A.sum() + eps)
+    tp = np.trace(A)
+    fp_fn = A.sum() - tp
+    score = tp / (tp + 0.5 * fp_fn + eps)
 
     return score
 
@@ -301,7 +297,8 @@ def train(model,
     losses : list
         Log of loss values during training
     """
-    x_sample = torch.Tensor(adata_train[pseudo_spots, :].X.A)
+    adata_ps = adata_train[pseudo_spots, :]
+    x_sample = torch.Tensor(adata_ps.X) if isinstance(adata_ps.X, np.ndarray) else torch.Tensor(adata_ps.X.A)
     gsva_sig = torch.Tensor(df_gsva_train.loc[pseudo_spots, :].to_numpy())
     dataloader = load_visium(adata_train, batch_size=batch_size)
 

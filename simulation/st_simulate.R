@@ -29,7 +29,7 @@ simSynthST <- function(meta, exp, n_spots) {
   colnames(syn_ct) <- cts
   
   cat("Simulating synthetic ST matrix...\n")
-  pb <- txtProgressBar(min = 0, max = n_spots, initial = 0)
+  pb <- txtProgressBar(min = 0, max = n_spots, initial = 0, style = 3)
   
   for (s in 1:n_spots) {
     setTxtProgressBar(pb, s)
