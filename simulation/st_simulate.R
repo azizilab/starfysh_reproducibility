@@ -63,7 +63,7 @@ opt = parse_args(opt_parser)
 n_spots <- opt$n_spots
 data_path <- opt$out
 ifile <- "sce.all_classified.technologies.RData"
-assert("Input file doesnt' exist", file.exists(paste0(data_path, ifile)))
+assert("Input file doesn't exist", file.exists(paste0(data_path, ifile)))
 cat("Loading PBMC datasets...\n")
 load(file=paste0(data_path, ifile))
 

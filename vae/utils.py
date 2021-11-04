@@ -208,6 +208,7 @@ def calc_diag_score(A, eps=1e-10):
      - F1 score: TP / (TP + 1/2(FP + FN))
     """
     A = np.asarray(A)
+    A[A < 0] = 0
     tp = np.trace(A)
     fp_fn = A.sum() - tp
     score = tp / (tp + 0.5 * fp_fn + eps)
