@@ -29,8 +29,12 @@ if (!dir.exists(opt$out)) {
   mkdir(opt$out)
 }
 
+# Load expression & normalize by median libsize
 cat("Loading expression & signature files...\n")
-exp_df <- read.csv(opt$exp, row.names = 1)
+exp_df_raw <- read.csv(opt$exp, row.names = 1)
+libsize <- colSums(exp_df_raw)
+median.libsize <- median(libsize)
+exp_df <- median.libsize * sweep(exp_df_raw, 2, libsize, FUN = '/')
 
 gene_sig <- read.csv(opt$sig, header = T)
 gs_celltype <- as.list(gene_sig)
