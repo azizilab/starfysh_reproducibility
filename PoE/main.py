@@ -356,26 +356,47 @@ def final_loss(bce_loss_exp,
                mu_poe, logvar_poe,
                gsva_sig_poe,
                device,
-               gsva_sig
+               gsva_sig,
+               mean_arch_ct,
+               criterion
               ):
     alpha = 5
     beta = 0.001
     # joint loss
     Loss_IBJ = (bce_loss_poe_rna + bce_loss_poe_img) + beta * (-0.5 * torch.sum(1+logvar_poe-mu_poe.pow(2)-logvar_poe.exp()))
+    #Loss_IBJ = (1e3*bce_loss_poe_rna + bce_loss_poe_img) + beta * (-0.5 * torch.sum(1+logvar_poe-mu_poe.pow(2)-logvar_poe.exp()))
     
     # multiple loss
-    Loss_IBM = (10*bce_loss_exp+50*bce_loss_img+
-                beta * (-0.5 * torch.sum(1+logvar_exp-mu_exp.pow(2)-logvar_exp.exp()))+
-                beta * (-0.5 * torch.sum(1+logvar_peri-mu_peri.pow(2)-logvar_peri.exp())) +
+    #Loss_IBM = (10*bce_loss_exp+50*bce_loss_img+
+    #            beta * (-0.5 * torch.sum(1+logvar_exp-mu_exp.pow(2)-logvar_exp.exp()))+
+    #            beta * (-0.5 * torch.sum(1+logvar_peri-mu_peri.pow(2)-logvar_peri.exp())) +
+    #            beta * (-0.5 * torch.sum(1+logvar_img-mu_img.pow(2)-logvar_img.exp())) 
+    #           )
+    #Loss_IBM = (500*bce_loss_exp+5*bce_loss_img+
+    #            beta * (-0.5 * torch.sum(1+logvar_exp-mu_exp.pow(2)-logvar_exp.exp()))+
+    #            beta * (-0.5 * torch.sum(1+logvar_peri-mu_peri.pow(2)-logvar_peri.exp())) +
+    #            beta * (-0.5 * torch.sum(1+logvar_img-mu_img.pow(2)-logvar_img.exp())) 
+    #           )
+    
+    #Loss_IBM = (10*bce_loss_exp+50*bce_loss_img+
+    #            beta * (-0.5 * torch.sum(1+logvar_exp-mu_exp.pow(2)-logvar_exp.exp()))+
+    #            beta * (-0.5 * torch.sum(1+logvar_peri-mu_peri.pow(2)-logvar_peri.exp())) +
+    #            beta * (-0.5 * torch.sum(1+logvar_img-mu_img.pow(2)-logvar_img.exp())) 
+    #           )
+    Loss_IBM = (5e4*bce_loss_exp+1*bce_loss_img+
+                5e2*beta * (-0.5 * torch.sum(1+logvar_exp-mu_exp.pow(2)-logvar_exp.exp()))+
+                5e2*beta * (-0.5 * torch.sum(1+logvar_peri-mu_peri.pow(2)-logvar_peri.exp())) +
                 beta * (-0.5 * torch.sum(1+logvar_img-mu_img.pow(2)-logvar_img.exp())) 
                )
     
     Loss_sig = 1e4*F.binary_cross_entropy_with_logits(mu_peri.to(device), gsva_sig.to(device))
+    #Loss_sig = 1e5*F.binary_cross_entropy_with_logits(mu_peri.to(device), gsva_sig.to(device))
     Loss_x = 1e4*F.binary_cross_entropy_with_logits(mu_exp.to(device), gsva_sig_poe.to(device))
+    Loss_anchor =  1e5*criterion(mu_peri, torch.Tensor(mean_arch_ct).to(device))
     Loss_sig_poe = 1e4*F.binary_cross_entropy_with_logits(mu_poe.to(device), gsva_sig_poe.to(device))
     
-    return Loss_IBJ + alpha * Loss_IBM + Loss_sig+ Loss_sig_poe + Loss_x
-def train(model, dataloader, dataset, device, optimizer, criterion, criterion_img,x_sample_variable,x_sample_sig,gsva_scores_train,gsva_sig):
+    return Loss_anchor+Loss_IBJ + alpha * Loss_IBM + Loss_sig+ Loss_sig_poe + Loss_x
+def train(model, dataloader, dataset, device, optimizer, criterion, criterion_img,x_sample_variable,x_sample_sig,gsva_scores_train,gsva_sig,mean_arch_ct):
     model.train()
     
     running_loss = 0.0
@@ -429,7 +450,9 @@ def train(model, dataloader, dataset, device, optimizer, criterion, criterion_im
                          mu_poe, logvar_poe,
                          gsva_sig_poe,
                          device,
-                         gsva_sig
+                         gsva_sig,
+                         mean_arch_ct,
+                          criterion
                         
                         ) 
         #gsva_sig_all
@@ -440,14 +463,14 @@ def train(model, dataloader, dataset, device, optimizer, criterion, criterion_im
     return train_loss
 
 
-def run_main(data_path,adata_sample,sample_id):
+def run_poe(data_path,adata_sample,sample_id):
     
     #sample_id = adata_sample.obs['sample']
     adata_sample = utils.exp_preprocess(adata_sample,n_top_genes=2000) 
     
     # load signature data [type x gene]
     signature_path = data_path
-    sig_fname = os.path.join(signature_path,  'bc_signatures_Overall_sorted_1122.csv')
+    sig_fname = os.path.join(signature_path,  'bc_signatures_version_1216.csv')
     df_sig = pd.read_csv(sig_fname)
     df_sig.columns = df_sig.columns.str.replace('.', ' ')
     df_sig.columns = df_sig.columns.str.replace('_', ' ')
@@ -456,7 +479,7 @@ def run_main(data_path,adata_sample,sample_id):
     
     # prepare gsva
     
-    df_gsva_raw= pd.read_csv(os.path.join(data_path, sample_id+'_gsva.csv'), index_col=0).transpose()
+    df_gsva_raw= pd.read_csv(os.path.join('../results/01_gsva_folder', sample_id+'_gsva.csv'), index_col=0).transpose()
     df_gsva_raw.index = df_gsva_raw.index+'-'+sample_id
     df_gsva_raw.columns = df_sig.columns
     
@@ -478,6 +501,8 @@ def run_main(data_path,adata_sample,sample_id):
     adata_image = imDeconvolved.Stains[:,:,0]
     adata_image = ((adata_image - adata_image.min())/(adata_image.max()-adata_image.min()) *255).astype(np.uint8)
 
+    #clahe = cv2.createCLAHE(clipLimit=20.0, tileGridSize=(20,20))
+    #clahe = cv2.createCLAHE(clipLimit=10.0, tileGridSize=(10,10)) 2021-01-05
     clahe = cv2.createCLAHE(clipLimit=10.0, tileGridSize=(8,8))
 
     adata_image = clahe.apply(adata_image)
@@ -533,6 +558,18 @@ def run_main(data_path,adata_sample,sample_id):
     gsva_scores_train = discretize_gsva(df_gsva_raw)
     
     
+    ## get the mean of arch and signature genes
+    mean_arch_ct = []
+
+    for i in df_gsva_raw.columns:#cell_dic_plot.keys():#valid_cell_dic_ct.keys():#ttt[~np.isnan(ttt)]:#cell_dic_plot.keys():
+
+        genes_sele = sig_genes_dict[i]
+        mean_n = adata_sample.to_df().loc[perif_spots][adata_sample.to_df().columns.intersection(genes_sele)].sum(axis=1)/len(adata_sample.to_df().columns.intersection(genes_sele))
+        mean_arch_ct.append(mean_n)#np.append(mean_arch_ct,mean_n)
+
+    mean_arch_ct = np.array(mean_arch_ct).T
+    
+    
     sig_vars, sig_vars_dict, sel_genes = calc_var_priors(adata_sample, sig_genes_dict) 
     
     x_sample_variable = torch.Tensor(adata_df_variable.loc[perif_spots].to_numpy())
@@ -570,15 +607,14 @@ def run_main(data_path,adata_sample,sample_id):
                                  x_sample_variable, 
                                  x_sample_sig,
                                  gsva_scores_train,
-                                 gsva_sig
+                                 gsva_sig,
+                                 mean_arch_ct
                                 )
         train_loss.append(train_epoch_loss)
         torch.cuda.empty_cache()
         print(f"Train Loss: {train_epoch_loss:.4f}")
     print('finish lower training rate')
     
-    torch.save(model.state_dict(), sample_id+'1215_model_single.pt')
-    utils.save_loss_plot(train_loss, train_loss,sample_id)
     
     recon_exp_stack = np.zeros([trainset.genexp.shape[0],trainset.genexp.shape[1]+trainset.genexp_sig.shape[1]])
     recon_img_stack = np.zeros([trainset.genexp.shape[0],patch_r*2,patch_r*2,1])
@@ -588,10 +624,12 @@ def run_main(data_path,adata_sample,sample_id):
     wholeimg_stitch = np.ones([2000,2000,1])*(-1)
     recon_wholeimg_stitch = np.ones([2000,2000,1])*(-1)
     recon_poe_wholeimg_stitch = np.ones([2000,2000,1])*(-1)
+    
+    
 
-    mu_exp_stack = np.zeros([trainset.genexp.shape[0],27])
-    mu_img_stack = np.zeros([trainset.genexp.shape[0],27])
-    mu_poe_stack = np.zeros([trainset.genexp.shape[0],27])
+    mu_exp_stack = np.zeros([trainset.genexp.shape[0],df_sig.shape[1]])
+    mu_img_stack = np.zeros([trainset.genexp.shape[0],df_sig.shape[1]])
+    mu_poe_stack = np.zeros([trainset.genexp.shape[0],df_sig.shape[1]])
 
     for i,(adata_variable, adata_sig, adata_img,data_loc) in enumerate(trainloader):
 
@@ -636,6 +674,9 @@ def run_main(data_path,adata_sample,sample_id):
             
           adata_df_concat = pd.concat([adata_df_variable,adata_df_signature], axis=1)
         
+        
+        
+        
             
             
-    return  recon_exp_stack, recon_img_stack, recon_poe_img_stack, recon_poe_rna_stack, wholeimg_stitch ,recon_wholeimg_stitch, recon_poe_wholeimg_stitch, mu_exp_stack, mu_img_stack, mu_poe_stack
+    return  recon_exp_stack, recon_img_stack, recon_poe_img_stack, recon_poe_rna_stack, wholeimg_stitch ,recon_wholeimg_stitch, recon_poe_wholeimg_stitch, mu_exp_stack, mu_img_stack, mu_poe_stack, model, train_loss, train_loss, adata_df_concat, map_info, mean_arch_ct

@@ -229,5 +229,5 @@ def save_loss_plot(train_loss, valid_loss,sample_id):
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.legend()
-    plt.savefig(sample_id+'loss.jpg')
+    plt.savefig("../results/02_PoE_factor/"+sample_id+'loss.jpg')
     plt.show()
