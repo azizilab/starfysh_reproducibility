@@ -41,7 +41,6 @@ gs_celltype <- as.list(gene_sig)
 gs_celltype <- lapply(gs_celltype, function(x) x[nzchar(x)])
 
 gsva_scores <- gsva(t(exp_df), gs_celltype, method  = "gsva")
-# heatmap(gsva_scores)
 
 # Write to output
 write.csv(t(gsva_scores), file = paste0(opt$out, opt$name))
