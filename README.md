@@ -19,7 +19,7 @@ Use spatial transcriptomics expression data & annotated signature gene sets as i
 ├── notebooks:      Sample notebook & tutorial (to be updated)
 ├── run_PoE:        Pipeline notebooks to generate pre/post-processing & analysis figures
 ├── semiVAE_all:    Combined model ( i). expression-based deconvolution; ii). expression + image (PoE) deconvolution
-├── VAE:            Previous expression-based deconvolution (to be cleaned)
+├── simulation:     Synthetic simulation from scRNA-seq for benchmark
 ```
 
 
