@@ -24,6 +24,7 @@ Use spatial transcriptomics expression data & annotated signature gene sets as i
 
 
 ## Installation
+(To be updated: currently only contain expression-based deconvolution model)
 ```bash
 # install
 python setup.py install --user
