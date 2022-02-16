@@ -14,10 +14,10 @@ Use spatial transcriptomics expression data & annotated signature gene sets as i
 ## Directories
 ```
 .
-├── archive:        Exploratory analysis notebooks & pipeline scripts
 ├── data:           Spatial Transcritomics & synthetic simulation datasets
 ├── notebooks:      Sample notebook & tutorial (to be updated)
 ├── run_PoE:        Pipeline notebooks to generate pre/post-processing & analysis figures
+├── scripts:        Exploratory analysis notebooks & pipeline scripts
 ├── semiVAE_all:    Combined model ( i). expression-based deconvolution; ii). expression + image (PoE) deconvolution
 ├── simulation:     Synthetic simulation from scRNA-seq for benchmark
 ```
