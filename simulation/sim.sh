@@ -21,7 +21,7 @@ echo "============\n"
 
 ./stereo_sim.py -c $rc -l $meta -ns $n_spots -ng $n_genes -o $gs_path
 
-#echo "[Step 2]: Calculate GSVA from synthesized ST data"
+echo "[Step 2]: Calculate GSVA from synthesized ST data"
 echo "============\n"
 ./gsva.R --exp $exp --sig $sig -o $gs_path --name $gs
 

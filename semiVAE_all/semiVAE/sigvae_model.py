@@ -1,7 +1,4 @@
-## forked from Yinuo's code
-import os
 import numpy as np
-import pandas as pd
 import random
 import torch
 import torch.nn as nn
@@ -334,13 +331,16 @@ class SignatureVAE(nn.Module):
 
     def loss(self,
              x,
+             mu_gexp,
              gsva_sig,
-             alpha=0.02
+             alpha=0.6,
+             beta=0.35
              ):
         """
-        Calculate loss = α * loss_full_data + (1-α) * loss_signature
+        Calculate loss = (1-α) * loss_full_data + α * loss_anchor + β * loss_sig
 
             loss_full_data = -elbo = -NLL of data + kl_divergence( q(z|x) || p(z) )
+            loss_anchor = MSE(
             loss_sig = BinaryCrossEntropy( qz_mu_sample, gsva_sig )
 
         """
@@ -363,16 +363,18 @@ class SignatureVAE(nn.Module):
 
         q_zx = Normal(qz_mu, qz_std)
         p_z = Normal(torch.zeros_like(qz_mu), torch.ones_like(qz_std))
-
         kl = kl_divergence(q_zx, p_z).sum(-1)
+
         loss = (nll + kl).mean()
+        loss_anchor = F.mse_loss(qz_mu_samp, mu_gexp)
         loss_sig = F.binary_cross_entropy_with_logits(qz_mu_samp, gsva_sig)
 
         loss_dict = {
             'nll': nll,
             'kl': kl,
+            'anchor': loss_anchor,
             'sig': loss_sig,
-            'total': alpha * loss + (1 - alpha) * loss_sig
+            'total': (1-alpha-beta)*loss + alpha*loss_anchor + beta*loss_sig
         }
 
         return loss_dict
