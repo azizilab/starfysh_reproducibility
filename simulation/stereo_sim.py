@@ -13,8 +13,44 @@ import numpy as np
 import torch as t
 import torch.distributions as dists
 
+from scipy.stats import lognorm, poisson
+
+
+def _fit_spot_libsize(libsize, idxs):
+    """
+    Fit library size from scRNA-seq data & sample expected library size 
+    to each synthetic Spatial Transcriptomics spot
+    """
+    s, loc, scale = lognorm.fit(libsize)
+    l = pd.Series(
+        lognorm.rvs(s, loc=loc, scale=scale, size=len(idxs)),
+        index=idxs
+    )
+    
+    return np.round(l).astype(np.uint32)
+
+
+def _find_sc_index(cnt, cand_idxs, libsize_raw, l, n_nbr=3):
+    """
+    Find the scRNA-seq indices with close library size to given expected library size (l) of 
+    the synthetic spot (s). Return the closest n neighbors to the given l.
+    """
+    assert len(cand_idxs) >= n_nbr, "Not enough scRNA-seq candidate indices to sample from"
+
+    # 'Mask out' indices of other cell types
+    mask = np.ones(cnt.shape[0], dtype=bool)
+    mask[cand_idxs] = True
+    libsize = libsize_raw.copy()
+    libsize[~mask] = -np.inf
+    
+    idxs = np.abs(libsize - l).argsort()[:n_nbr]
+
+    return idxs
+                      
 
 def _assemble_spot(cnt : np.ndarray,
+                  libsize : np.ndarray,
+                  l_s : int,
                   labels : np.ndarray,
                   alpha : float = 1.0,
                   fraction : float = 0.1,
@@ -28,6 +64,11 @@ def _assemble_spot(cnt : np.ndarray,
     ---------
     cnt : np.ndarray
         single cell count data [n_cells x n_genes]
+    libsize : np.ndarray
+        library size of single cell count data [n_cells]
+    l_s : int
+        expected library size for all cells captured 
+        in the current spot
     labels : np.ndarray
         single cell annotations [n_cells]
     alpha : float
@@ -44,7 +85,7 @@ def _assemble_spot(cnt : np.ndarray,
     spot
     """
 
-    # sample between 10 to 30 cells to be present
+    # sample between 5 to 15 cells to be present
     # at spot
     n_cells = dists.uniform.Uniform(low = bounds[0],
                                     high = bounds[1]).sample().round().type(t.int)
@@ -72,6 +113,7 @@ def _assemble_spot(cnt : np.ndarray,
 
     # select which types to include
     pick_types = t.randperm(n_labels)[0:n_types]
+    
     # pick at least one cell for spot
     members = t.zeros(n_labels).type(t.float)
     while members.sum() < 1:
@@ -84,12 +126,17 @@ def _assemble_spot(cnt : np.ndarray,
     props = members / members.sum()
     # convert to ints
     members = members.type(t.int)
-    # get number of cells from each cell type
 
+    # simulate expected library size for each scRNA-seq cell 
+    # captured by given spot
+    # expc_l_s = poisson.rvs(l_s, size=n_types.numpy().astype(np.uint8))
+    
     # generate spot expression data
     spot_expr = t.zeros(cnt.shape[1]).type(t.float32)
-
+    
     for z in range(n_types):
+        # previous version: random assign scRNA-seq indices of the given cell type
+        """
         # get indices of selected type
         idx = np.where(labels == uni_labs[pick_types[z]])[0]
         # pick random cells from type
@@ -97,8 +144,17 @@ def _assemble_spot(cnt : np.ndarray,
         idx = idx[0:members[pick_types[z]]]
         # add fraction of transcripts to spot expression
         spot_expr +=  t.tensor((cnt[idx,:]*fraction).sum(axis = 0).round().astype(np.float32))
-
-
+        """
+        
+        # current version: assign scRNA-seq indices close to the expected spot library size
+        # get indices of the selected type with library sizes close to 
+        # expected library size of the spot
+        n_cells_ct = members[pick_types[z]]
+        cand_idxs = np.where(labels == uni_labs[pick_types[z]])[0]
+        idxs = _find_sc_index(cnt, cand_idxs, libsize, l_s, n_cells_ct)
+        
+        spot_expr += t.tensor((cnt[idxs, :] * fraction).sum(0).round().astype(np.float32))
+        
     return {'expr':spot_expr,
             'proportions':props,
             'members': members,
@@ -130,7 +186,6 @@ def assemble_data_set(cnt : pd.DataFrame,
     """
 
     # get labels
-    # labels = labels.loc[:,'bio_celltype']
     labels = labels.loc[:, 'celltype_major']
 
     # make sure number of genes does not
@@ -149,16 +204,25 @@ def assemble_data_set(cnt : pd.DataFrame,
     st_cnt = np.zeros((n_spots,cnt.shape[1]))
     st_prop = np.zeros((n_spots,n_labels))
     st_memb = np.zeros((n_spots,n_labels))
-
+    
+    # calculate scRNA-seq library size & 
+    # sample expected library size for each spot
+    libsize = cnt.sum(1).to_numpy().astype(np.float64)
+    expc_libsize = _fit_spot_libsize(libsize, labels)
+    
     np.random.seed(1337)
     t.manual_seed(1337)
+    
     # generate one spot at a time
-    for spot in range(n_spots):
+    for spot, l_s in zip(range(n_spots), expc_libsize):
+        
         spot_data = assemble_fun(cnt.values,
+                                 libsize,
+                                 l_s,
                                  labels.values,
                                  bounds = n_cell_range,
                                  )
-
+        
         st_cnt[spot,:] = spot_data['expr']
         st_prop[spot,:] = spot_data['proportions']
         st_memb[spot,:] =  spot_data['members']
