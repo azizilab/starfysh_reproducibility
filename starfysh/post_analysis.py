@@ -9,10 +9,13 @@ def get_z_umap(inference_outputs):
     qz_m_ct = inference_outputs["qz_m_ct"].detach().numpy()
     
     fit = umap.UMAP(
-            n_neighbors=45,
-            min_dist=0.5,
-                   )
-    u = fit.fit_transform(qz_m_ct.reshape([2551,-1]))    
+        n_neighbors=45,
+        min_dist=0.5,
+    )
+    
+    n_spot = qz_m_ct.shape[0]
+    
+    u = fit.fit_transform(qz_m_ct.reshape([n_spot,-1]))    
     return u
 
 
