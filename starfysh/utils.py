@@ -255,12 +255,64 @@ def get_simu_map_info(umap_plot):
                             index = umap_plot.index)
     return map_info
 
-def get_windowed_library(adata_sample,map_info,library, window_size):
+def get_windowed_library(adata_sample,map_info,library, window_size, spatial=False, size=[50, 50]):
+    # TODO: add smoothing of the n nearest spots for real ST data (hexagon)
+    
     library_n = []
-    for i in adata_sample.obs_names:
-        window_size = window_size
-        dist_arr = np.sqrt((map_info.loc[:,'array_col']-map_info.loc[i,'array_col'])**2 + (map_info.loc[:,'array_row']-map_info.loc[i,'array_row'])**2)
-        dist_arr<window_size
-        library_n.append(library[dist_arr<window_size].mean())
+    if not spatial:
+        print('Smoothing library size based on UMAP locations')
+        for i in adata_sample.obs_names:
+            window_size = window_size
+            dist_arr = np.sqrt((map_info.loc[:,'array_col']-map_info.loc[i,'array_col'])**2 + (map_info.loc[:,'array_row']-map_info.loc[i,'array_row'])**2)
+            dist_arr<window_size
+            library_n.append(library[dist_arr<window_size].mean())
+
+    else:
+        print('Smoothing library size based on simulated locations')
+        library = library.reshape(size[0], size[1])
+        for i in range(size[0]):
+            for j in range(size[1]):
+                coords = _get_nbr_coords(size, i, j)
+                lib_smoothed = library[coords].flatten().sum() / len(coords[0])
+                library_n.append(lib_smoothed)
+
     library_n = np.array(library_n)
     return library_n
+  
+    
+def _get_nbr_coords(size, i, j):
+    if i == 0 and j == 0:
+        coords = ([i, i, i+1, i+1], 
+                  [j, i+1, i, i+1])
+    elif i == 0 and j+1 == size[1]:
+        coords = ([i, i, i+1, i+1],
+                  [j, j-1, j-1, j])
+    elif i+1 == size[0] and j == 0:
+        coords = ([i, i-1, i-1, i],
+                  [j, j, j+1, j+1])
+    elif i+1 == size[0] and j+1 == size[1]:
+        coords = ([i, i-1, i-1, i],
+                  [j, j-1, j, j-1])
+
+    elif i == 0:
+        coords = ([i, i, i, i+1, i+1, i+1],
+                  [j, j-1, j+1, j-1, j, j+1])
+        
+    elif i+1 == size[1]:
+        coords = ([i, i-1, i-1, i-1, i, i],
+                  [j, j-1, j, j+1, j-1, j+1])
+        
+    elif j == 0:
+        coords = ([i, i-1, i-1, i, i+1, i+1],
+                  [j, j, j+1, j+1, j, j+1])
+    elif j+1 == size[0]:
+        coords = ([i, i-1, i-1, i, i+1, i+1],
+                  [j, j-1, j, j-1, j-1, j])
+        
+
+        
+    else:
+        coords = ([i-1, i-1, i-1, i, i, i, i+1, i+1, i+1],
+                  [j-1, j, j+1, j-1, j, j+1, j-1, j, j+1])
+        
+    return coords
