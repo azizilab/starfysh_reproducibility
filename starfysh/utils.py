@@ -235,7 +235,6 @@ def get_anchor_spots(adata_sample,
     return pure_spots, pure_dict, adata_pure
 
 
-
 def get_umap(adata_sample):
     
     sc.tl.pca(adata_sample, svd_solver='arpack')
@@ -255,32 +254,63 @@ def get_simu_map_info(umap_plot):
                             index = umap_plot.index)
     return map_info
 
-def get_windowed_library(adata_sample,map_info,library, window_size, spatial=False, size=[50, 50]):
+def get_windowed_library(adata_sample, map_info, library, window_size, pattern='real', size=[50, 50], eps=5):
     # TODO: add smoothing of the n nearest spots for real ST data (hexagon)
-    
+
+    assert pattern == 'real' or pattern == 'simulated' or pattern == 'UMAP', \
+        "Invalid spatial pattern to get smoothed library"
+
     library_n = []
-    if not spatial:
+    if pattern == 'UMAP':
         print('Smoothing library size based on UMAP locations')
         for i in adata_sample.obs_names:
             window_size = window_size
             dist_arr = np.sqrt((map_info.loc[:,'array_col']-map_info.loc[i,'array_col'])**2 + (map_info.loc[:,'array_row']-map_info.loc[i,'array_row'])**2)
-            dist_arr<window_size
-            library_n.append(library[dist_arr<window_size].mean())
+            dist_arr < window_size
+            library_n.append(library[dist_arr < window_size].mean())
 
-    else:
+    elif pattern == 'simulated':
         print('Smoothing library size based on simulated locations')
         library = library.reshape(size[0], size[1])
         for i in range(size[0]):
             for j in range(size[1]):
-                coords = _get_nbr_coords(size, i, j)
-                lib_smoothed = library[coords].flatten().sum() / len(coords[0])
+                nbr_coords = _get_simu_nbr_coords(size, i, j)
+                lib_smoothed = library[nbr_coords].flatten().sum() / len(nbr_coords[0])
                 library_n.append(lib_smoothed)
+
+    else:  # 'real' pattern
+        print('Smoothing library size based on real locations')
+        coords = adata_sample.obsm['spatial']
+        nbr_coords = _get_real_nbr_coords(coords)
+
+        # Verify whether each spot exactly has 6 nearest neighbors (edge location?)
+        for i in range(nbr_coords.shape[0]):
+            true_nbr_coords = [nbr_coords[i, 0], nbr_coords[i, 1]]
+            dist = _calc_dist(coords, nbr_coords[i, 0], nbr_coords[i, 1])
+
+            for j in range(2, 7):
+                curr_dist = _calc_dist(coords, nbr_coords[i, 0], nbr_coords[i, j])
+                if np.abs(dist - curr_dist) < eps:
+                    true_nbr_coords.append(nbr_coords[i, j])
+
+            lib_smoothed = library[true_nbr_coords].flatten().sum() / len(true_nbr_coords)
+            library_n.append(lib_smoothed)
 
     library_n = np.array(library_n)
     return library_n
+
+
+def _calc_dist(coords, idx1, idx2):
+    coord1, coord2 = coords[idx1], coords[idx2]
+    return np.sqrt((coord1[0] - coord2[0]) ** 2 + (coord1[1] - coord2[1]) ** 2)
+
+def _get_real_nbr_coords(coords):
+    nbrs = NearestNeighbors(n_neighbors=7).fit(coords)
+    nn_graph = nbrs.kneighbors(coords)[1]
+    return nn_graph
   
     
-def _get_nbr_coords(size, i, j):
+def _get_simu_nbr_coords(size, i, j):
     if i == 0 and j == 0:
         coords = ([i, i, i+1, i+1], 
                   [j, i+1, i, i+1])
@@ -308,9 +338,6 @@ def _get_nbr_coords(size, i, j):
     elif j+1 == size[0]:
         coords = ([i, i-1, i-1, i, i+1, i+1],
                   [j, j-1, j, j-1, j-1, j])
-        
-
-        
     else:
         coords = ([i-1, i-1, i-1, i, i, i, i+1, i+1, i+1],
                   [j-1, j, j+1, j-1, j, j+1, j-1, j, j+1])
