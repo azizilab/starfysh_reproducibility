@@ -7,11 +7,12 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.linear_model import LinearRegression
 from torch.utils.data import DataLoader
 import sys
-#import histomicstk as htk
+IN_COLAB = "google.colab" in sys.modules
+if not IN_COLAB:
+    import histomicstk as htk
 from skimage import io
 import cv2
 import json
-import torch
 
 def preprocess(adata_raw, lognorm=True, min_perc=None, max_perc=None, n_top_genes=6000, mt_thld=100):
     """
@@ -84,6 +85,8 @@ def preprocess_img(data_path,sample_id, adata_index, hchannal=False):
     get hematoxylin channel of the image, and get the loc of image
     """
     if hchannal:
+        adata_image = io.imread(os.path.join(data_path, sample_id, 'spatial','hematoxylin.png'))
+    else:
         adata_image = io.imread(os.path.join(data_path, sample_id, 'spatial','tissue_hires_image.png'))
         #adata_image = (adata_image-adata_image.min())/(adata_image.max()-adata_image.min())
         adata_image_norm = (adata_image*255).astype(np.uint8)
@@ -114,12 +117,7 @@ def preprocess_img(data_path,sample_id, adata_index, hchannal=False):
         adata_image_e = (adata_image_e - adata_image_e.min())/(adata_image_e.max()-adata_image_e.min())
     #adata_image = np.clip(adata_image, 0.2, 0.8)
     #adata_image = (adata_image - adata_image.min())/(adata_image.max()-adata_image.min())
-    else: 
-        adata_image = io.imread(os.path.join(data_path, sample_id, 'spatial','tissue_hires_image.png'))
-        #adata_image = (adata_image-adata_image.min())/(adata_image.max()-adata_image.min())
-        adata_image_norm = (adata_image*255).astype(np.uint8)
-
-
+    
     #Mapping images to location
     
     map_info = []
@@ -136,8 +134,7 @@ def preprocess_img(data_path,sample_id, adata_index, hchannal=False):
     map_info.loc[:,'imagecol'] = tissue_position_list.iloc[:,4] *tissue_hires_scalef
     map_info.loc[:,'sample'] = sample_id
     
-    #return adata_image, adata_image_h, adata_image_e, map_info
-    return adata_image, map_info
+    return adata_image, adata_image_h, adata_image_e, map_info
 
 
 def gene_for_train(adata, df_sig):
@@ -168,7 +165,7 @@ def load_adata(data_folder,sample_id, n_genes):
         n_genes: the number of the gene for training
     """
     if sample_id.startswith('MBC'):
-        adata_sample = sc.read_visium(path=os.path.join(data_folder, sample_id),library_id =  sample_id)
+        adata_sample = sc.read_visium(path=os.path.join(root_dir,data_folder, sample_id),library_id =  sample_id)
         adata_sample.var_names_make_unique()
         adata_sample.obs['sample']=sample_id
     elif sample_id.startswith('simu'):
@@ -182,11 +179,7 @@ def load_adata(data_folder,sample_id, n_genes):
     adata_sample = adata_sample[:,adata_sample_pre.var_names]
     adata_sample.var = adata_sample_pre.var
     adata_sample.obs = adata_sample_pre.obs
-
-    if '_index' in adata_sample.var.columns:
-        adata_sample.var_names=adata_sample.var['_index']
-
-    return adata_sample, adata_sample_pre
+    return adata_sample
 
 def get_adata_wsig(adata_sample, gene_sig):
     """
@@ -198,30 +191,16 @@ def get_adata_wsig(adata_sample, gene_sig):
     return adata_sample_filter
 
 
-def get_sig_mean(adata_sample, gene_sig, log_lib):
+def get_sig_mean(adata_sample, gene_sig):
     sig_version = 'raw' # or log
     gene_sig_exp_m = pd.DataFrame()
     for i in range(gene_sig.shape[1]):
         if sig_version == 'raw':
-            adata_df = adata_sample.to_df()
-            #adata_df[adata_df == 0] = np.nan
-            gene_sig_exp_m[gene_sig.columns[i]]=np.nanmean((adata_df.loc[:,np.intersect1d(adata_sample.var_names,np.unique(gene_sig.iloc[:,i].astype(str)))]),axis=1)
+            gene_sig_exp_m[gene_sig.columns[i]]=adata_sample.to_df().loc[:,np.intersect1d(adata_sample.var_names,np.unique(gene_sig.iloc[:,i].astype(str)))].mean(axis=1)
         else: 
-            gene_sig_exp_m[gene_sig.columns[i]]=np.log((adata_sample_pre.to_df().loc[:,np.intersect1d(adata_sample_pre.var_names,np.unique(gene_sig.iloc[:,i].astype(str)))]+1)).mean(axis=1)
-    
-    #gene_sig_exp_arr = torch.Tensor(np.array(gene_sig_exp_m))
-    #gene_sig_exp_arr = gene_sig_exp_arr.detach().cpu().numpy()
-    gene_sig_exp_arr = pd.DataFrame(np.array(gene_sig_exp_m),columns=gene_sig_exp_m.columns,index=adata_sample.obs_names)
-    return gene_sig_exp_arr
+            gene_sig_exp_m[gene_sig.columns[i]]=adata_sample_pre.to_df().loc[:,np.intersect1d(adata_sample_pre.var_names,np.unique(gene_sig.iloc[:,i].astype(str)))].mean(axis=1)
+    return gene_sig_exp_m
 
-def filter_gene_sig(gene_sig,adata_df):
-    for i in range(gene_sig.shape[0]):
-        for j in range(gene_sig.shape[1]):
-            gene = gene_sig.iloc[i,j]
-            if gene in adata_df.columns:
-                if adata_df.loc[:,gene].sum()<20:
-                    gene_sig.iloc[i,j]='NaN'
-    return gene_sig
 
 def get_anchor_spots(adata_sample,
                      sig_mean,
@@ -241,7 +220,7 @@ def get_anchor_spots(adata_sample,
                ((adata_sample.to_df()>0).sum(axis=1)<np.percentile((adata_sample.to_df()>0).sum(axis=1), v_high)) & 
                ((adata_sample.to_df()).sum(axis=1)<np.percentile((adata_sample.to_df()).sum(axis=1), v_high)) 
               )
-    pure_spots = np.transpose(sig_mean.loc[highq_spots,:].index[(-np.array(sig_mean.loc[highq_spots,:])).argsort(axis=0)[:n_anchor,:]])
+    pure_spots = np.transpose(sig_mean.loc[highq_spots,:].index[(-np.array(sig_mean.loc[highq_spots,:])).argsort(axis=0)[:40,:]])
 
     pure_dict = {
             ct: spot 
@@ -275,15 +254,92 @@ def get_simu_map_info(umap_plot):
                             index = umap_plot.index)
     return map_info
 
-def get_windowed_library(adata_sample,map_info,library, window_size):
+def get_windowed_library(adata_sample, map_info, library, window_size, pattern='real', size=[50, 50], eps=5):
+    # TODO: add smoothing of the n nearest spots for real ST data (hexagon)
+
+    assert pattern == 'real' or pattern == 'simulated' or pattern == 'UMAP', \
+        "Invalid spatial pattern to get smoothed library"
+
     library_n = []
-    for i in adata_sample.obs_names:
-        window_size = window_size
-        dist_arr = np.sqrt((map_info.loc[:,'array_col']-map_info.loc[i,'array_col'])**2 + (map_info.loc[:,'array_row']-map_info.loc[i,'array_row'])**2)
-        dist_arr<window_size
-        library_n.append(library[dist_arr<window_size].mean())
+    if pattern == 'UMAP':
+        print('Smoothing library size based on UMAP locations')
+        for i in adata_sample.obs_names:
+            window_size = window_size
+            dist_arr = np.sqrt((map_info.loc[:,'array_col']-map_info.loc[i,'array_col'])**2 + (map_info.loc[:,'array_row']-map_info.loc[i,'array_row'])**2)
+            dist_arr < window_size
+            library_n.append(library[dist_arr < window_size].mean())
+
+    elif pattern == 'simulated':
+        print('Smoothing library size based on simulated locations')
+        library = library.reshape(size[0], size[1])
+        for i in range(size[0]):
+            for j in range(size[1]):
+                nbr_coords = _get_simu_nbr_coords(size, i, j)
+                lib_smoothed = library[nbr_coords].flatten().sum() / len(nbr_coords[0])
+                library_n.append(lib_smoothed)
+
+    else:  # 'real' pattern
+        print('Smoothing library size based on real locations')
+        coords = adata_sample.obsm['spatial']
+        nbr_coords = _get_real_nbr_coords(coords)
+
+        # Verify whether each spot exactly has 6 nearest neighbors (edge location?)
+        for i in range(nbr_coords.shape[0]):
+            true_nbr_coords = [nbr_coords[i, 0], nbr_coords[i, 1]]
+            dist = _calc_dist(coords, nbr_coords[i, 0], nbr_coords[i, 1])
+
+            for j in range(2, 7):
+                curr_dist = _calc_dist(coords, nbr_coords[i, 0], nbr_coords[i, j])
+                if np.abs(dist - curr_dist) < eps:
+                    true_nbr_coords.append(nbr_coords[i, j])
+
+            lib_smoothed = library[true_nbr_coords].flatten().sum() / len(true_nbr_coords)
+            library_n.append(lib_smoothed)
+
     library_n = np.array(library_n)
     return library_n
 
 
+def _calc_dist(coords, idx1, idx2):
+    coord1, coord2 = coords[idx1], coords[idx2]
+    return np.sqrt((coord1[0] - coord2[0]) ** 2 + (coord1[1] - coord2[1]) ** 2)
 
+def _get_real_nbr_coords(coords):
+    nbrs = NearestNeighbors(n_neighbors=7).fit(coords)
+    nn_graph = nbrs.kneighbors(coords)[1]
+    return nn_graph
+  
+    
+def _get_simu_nbr_coords(size, i, j):
+    if i == 0 and j == 0:
+        coords = ([i, i, i+1, i+1], 
+                  [j, i+1, i, i+1])
+    elif i == 0 and j+1 == size[1]:
+        coords = ([i, i, i+1, i+1],
+                  [j, j-1, j-1, j])
+    elif i+1 == size[0] and j == 0:
+        coords = ([i, i-1, i-1, i],
+                  [j, j, j+1, j+1])
+    elif i+1 == size[0] and j+1 == size[1]:
+        coords = ([i, i-1, i-1, i],
+                  [j, j-1, j, j-1])
+
+    elif i == 0:
+        coords = ([i, i, i, i+1, i+1, i+1],
+                  [j, j-1, j+1, j-1, j, j+1])
+        
+    elif i+1 == size[1]:
+        coords = ([i, i-1, i-1, i-1, i, i],
+                  [j, j-1, j, j+1, j-1, j+1])
+        
+    elif j == 0:
+        coords = ([i, i-1, i-1, i, i+1, i+1],
+                  [j, j, j+1, j+1, j, j+1])
+    elif j+1 == size[0]:
+        coords = ([i, i-1, i-1, i, i+1, i+1],
+                  [j, j-1, j, j-1, j-1, j])
+    else:
+        coords = ([i-1, i-1, i-1, i, i, i, i+1, i+1, i+1],
+                  [j-1, j, j+1, j-1, j, j+1, j-1, j, j+1])
+        
+    return coords

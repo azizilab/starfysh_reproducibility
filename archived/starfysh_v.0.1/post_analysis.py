@@ -4,25 +4,27 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from scipy.stats import pearsonr
 import seaborn as sns
-from scipy.stats import gaussian_kde
 
 def get_z_umap(inference_outputs):
-    qz_m_ct = inference_outputs["qz_m_ct"].detach().cpu().numpy()
+    qz_m_ct = inference_outputs["qz_m_ct"].detach().numpy()
     
     fit = umap.UMAP(
-            n_neighbors=45,
-            min_dist=0.5,
-                   )
-    u = fit.fit_transform(qz_m_ct.reshape([qz_m_ct.shape[0],-1]))    
+        n_neighbors=45,
+        min_dist=0.5,
+    )
+    
+    n_spot = qz_m_ct.shape[0]
+    
+    u = fit.fit_transform(qz_m_ct.reshape([n_spot,-1]))    
     return u
 
 
 def plot_type_all(inference_outputs,u, proportions):
-    qc_m = inference_outputs["qc_m"].detach().cpu().numpy()
+    qc_m = inference_outputs["qc_m"].detach().numpy()
     group_c = np.argmax(qc_m,axis=1)
     plt.figure(dpi=500,figsize=(2,2))
     cmaps = ['Blues','Greens','Reds','Oranges','Purples']
-    for i in range(proportions.shape[1]):
+    for i in range(5):
         plt.scatter(u[group_c==i,0],u[group_c==i,1],s=1,c = qc_m[group_c==i,i], cmap=cmaps[i])
     plt.legend(proportions.columns,loc='right', bbox_to_anchor=(2.2,0.5),)
     #plt.colorbar(label='cell number')
@@ -31,7 +33,7 @@ def plot_type_all(inference_outputs,u, proportions):
     
     
 def get_corr_map(inference_outputs,sig_mean,proportions):
-    qc_m_n = inference_outputs["qc_m"].detach().cpu().numpy()
+    qc_m_n = inference_outputs["qc_m"].detach().numpy()
     corr_map_qcm = np.zeros([qc_m_n.shape[1],qc_m_n.shape[1]])
     corr_map_genesig = np.zeros([qc_m_n.shape[1],qc_m_n.shape[1]])
     for i in range(corr_map_qcm.shape[0]):
@@ -46,10 +48,11 @@ def get_corr_map(inference_outputs,sig_mean,proportions):
                     )
     #plt.imshow(corr_map_qcm,vmin=-1,vmax=1,cmap='RdBu_r')
     #plt.set_xtickslabel(['1','2','3'])
-    plt.xticks(np.array(range(sig_mean.shape[1]))+0.5,labels=proportions.columns,rotation=90)
-    plt.yticks(np.array(range(sig_mean.shape[1]))+0.5,labels=proportions.columns,rotation=0)
+    plt.xticks([0.5,1.5,2.5,3.5,4.5],labels=proportions.columns,rotation=90)
+    plt.yticks([0.5,1.5,2.5,3.5,4.5],labels=proportions.columns,rotation=0)
     plt.xlabel('Estimated proportion')
     plt.ylabel('Ground truth proportion')
+
 
     plt.figure(dpi=300,figsize=(3.2,3.2))
     ax = sns.heatmap(corr_map_genesig, annot=True,
@@ -59,12 +62,13 @@ def get_corr_map(inference_outputs,sig_mean,proportions):
     #plt.imshow(corr_map_genesig,vmin=-1,vmax=1,cmap='RdBu_r')
     #plt.set_xtickslabel(['1','2','3'])
 
-    plt.xticks(np.array(range(sig_mean.shape[1]))+0.5,labels=proportions.columns,rotation=90)
-    plt.yticks(np.array(range(sig_mean.shape[1]))+0.5,labels=proportions.columns,rotation=0)
+    plt.xticks([0.5,1.5,2.5,3.5,4.5],labels=proportions.columns,rotation=90)
+    plt.yticks([0.5,1.5,2.5,3.5,4.5],labels=proportions.columns,rotation=0)
     plt.xlabel('Gene expression mean')
     plt.ylabel('Ground truth proportion')
+
     
-def pl_spatial_inf_feature(adata_sample,
+def pl_spatial_feature(adata_sample,
                map_info,
                inference_outputs,
                feature, 
@@ -75,7 +79,7 @@ def pl_spatial_inf_feature(adata_sample,
                vmax=None,
                s=3,      
               ):
-    qvar = inference_outputs[feature].detach().cpu().numpy()
+    qvar = inference_outputs[feature].detach().numpy()
     color_idx_list = (qvar[:,idx].astype(float))
     all_loc = np.array(map_info.loc[:,['array_col','array_row']])
     fig,axs= plt.subplots(1,1,figsize=(4,3),dpi=200)
@@ -170,109 +174,3 @@ def display_reconst(df_true,
     ax.xaxis.set_ticks_position('bottom')
 
     plt.show()
-    
-
-def pred_prop_scatter(inference_outputs, proportions,idx):
-    qc_m = inference_outputs["qc_m"].detach().cpu().numpy()
-    
-    figs,ax=plt.subplots(1,1,dpi=300,figsize=(2,2))
-    
-    v1 = proportions.iloc[:,idx].values
-    v2 = qc_m[:,idx]
-    
-    v_stacked = np.vstack([v1, v2])
-    den = gaussian_kde(v_stacked)(v_stacked)
-    
-    ax.scatter(v1,v2,c=den,s=1,cmap='turbo',vmax=den.max()/3)
-    
-    ax.set_aspect('equal')
-    ax.spines['right'].set_visible(False)
-    ax.spines['top'].set_visible(False)
-    ax.axis('equal')
-    # Only show ticks on the left and bottom spines
-    ax.yaxis.set_ticks_position('left')
-    ax.xaxis.set_ticks_position('bottom')
-    plt.title(proportions.columns[idx])
-    plt.xlim([v1.min()-0.1,v1.max()+0.1])
-    plt.ylim([v2.min()-0.1,v2.max()+0.1])
-    #plt.xticks(np.arange(0,1.1,0.5))
-    #plt.yticks(np.arange(0,1.1,0.5))
-    plt.xlabel('Ground truth proportions')
-    plt.ylabel('Predicted proportions')
-
-
-def plot_stacked_prop(results, category_names):
-    """
-    Parameters
-    ----------
-    results : dict
-        A mapping from question labels to a list of answers per category.
-        It is assumed all lists contain the same number of entries and that
-        it matches the length of *category_names*.
-    category_names : list of str
-        The category labels.
-    """
-    labels = list(results.keys())
-    data = np.array(list(results.values()))
-    data_cum = data.cumsum(axis=1)
-    category_colors = plt.get_cmap('rainbow')(
-        np.linspace(0.15, 0.85, data.shape[1]))
-    #category_colors = np.array(['b','g','r','oragne','purple'])
-    fig, ax = plt.subplots(figsize=(2.5,1.8),dpi=300)
-    ax.invert_yaxis()
-    ax.xaxis.set_visible(False)
-    ax.set_xlim(0, np.sum(data, axis=1).max())
-
-    for i, (colname, color) in enumerate(zip(category_names, category_colors)):
-        widths = data[:, i]
-        starts = data_cum[:, i] - widths
-        ax.barh(labels, widths, left=starts, height=0.6,label=colname, color=color)
-        xcenters = starts + widths / 2
-
-        r, g, b, _ = color
-        text_color = 'black' #if r * g * b < 0.5 else 'darkgrey'
-        #for y, (x, c) in enumerate(zip(xcenters, widths)):
-        #    ax.text(x, y, str(round(c,2)), ha='center', va='center',
-        #            color=text_color)
-    #ax.legend(ncol=len(category_names), bbox_to_anchor=(0, 1),
-    #          loc='right', fontsize='small')
-    ax.legend(category_names,loc='right',bbox_to_anchor=(2, 0.5))
-    return fig, ax
-
-
-def plot_density(results, category_names):
-    """
-    Parameters
-    ----------
-    results : dict
-        A mapping from question labels to a list of answers per category.
-        It is assumed all lists contain the same number of entries and that
-        it matches the length of *category_names*.
-    category_names : list of str
-        The category labels.
-    """
-    labels = list(results.keys())
-    data = np.array(list(results.values()))
-    category_colors = plt.get_cmap('RdBu_r')(
-        np.linspace(0.15, 0.85, data.shape[1]))
-    fig, ax = plt.subplots(figsize=(2.5,1.8),dpi=300)
-    ax.invert_yaxis()
-    #ax.xaxis.set_visible(False)
-    ax.set_xlim(0, np.sum(data, axis=1).max())
-
-    for i, (colname, color) in enumerate(zip(category_names, category_colors)):
-        widths = data[:, i]
-        starts = 0
-        ax.barh(labels, widths, left=starts, height=0.6,label=colname, color=color)
-        #xcenters = starts + widths / 2
-
-        r, g, b, _ = color
-        text_color = 'black' #if r * g * b < 0.5 else 'darkgrey'
-        #for y, (x, c) in enumerate(zip(xcenters, widths)):
-        #    ax.text(x, y, str(round(c,2)), ha='center', va='center',
-        #            color=text_color)
-    #ax.legend(ncol=len(category_names), bbox_to_anchor=(0, 1),
-    #          loc='right', fontsize='small')
-    #ax.legend(category_names,loc='right',bbox_to_anchor=(2, 0.5))
-    #ax.set_title('Inferred density')
-    return fig, ax

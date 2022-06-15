@@ -38,33 +38,24 @@ class AVAE(nn.Module):
     def __init__(self,
                  adata,
                  gene_sig,
-                 alpha_min,
-                 win_loglib,
     ) -> None:
         """
                  
         """
         super(AVAE, self).__init__()
-        self.win_loglib=torch.Tensor(win_loglib)
-        
         self.c_in = adata.shape[1] # c_in : Num. input features (# input genes)
         self.c_bn = 10 # c_bn : latent number, numbers of bottle neck
-        self.c_hidden = 256
+        self.c_hidden = 128
         self.c_kn = gene_sig.shape[1]
-
-        #self.alpha = torch.nn.Parameter(torch.rand(1)*1e2,requires_grad=True)
-        #self.alpha = torch.nn.Parameter(torch.rand(1)*1e2+alpha_min,requires_grad=True)
-        self.alpha = torch.nn.Parameter(torch.rand(self.c_kn)*1e3,requires_grad=True)
-        #self.alpha2 = torch.nn.Parameter(torch.rand(self.c_kn)*1e2,requires_grad=True)
-        #self.alpha2 = torch.nn.Parameter(torch.rand(1)*1e3,requires_grad=True)
-
+        self.alpha = torch.nn.Parameter(torch.rand(1)*2e2+1,requires_grad=True)
+        self.alpha2 = torch.nn.Parameter(torch.rand(1)*2e2+1,requires_grad=True)
+        #self.alpha =50
         
         self.c_enc = nn.Sequential(
                                 nn.Linear(self.c_in, self.c_hidden, bias=True),
                                 nn.BatchNorm1d(self.c_hidden, momentum=0.01,eps=0.001),
                                 nn.ReLU()
         )
-        
         self.c_enc_m = nn.Sequential(
                                 nn.Linear(self.c_hidden, self.c_kn, bias=True),
                                 nn.BatchNorm1d(self.c_kn, momentum=0.01,eps=0.001),
@@ -72,7 +63,7 @@ class AVAE(nn.Module):
                                 nn.Softmax()
                                 #nn.Softplus()
         )
-        #self.c_enc_logv = nn.Linear(self.c_hidden, self.c_hidden)
+        self.c_enc_logv = nn.Linear(self.c_hidden, self.c_hidden)
         
         self.l_enc = nn.Sequential(
                                 nn.Linear(self.c_in, self.c_hidden, bias=True),
@@ -82,6 +73,10 @@ class AVAE(nn.Module):
                                 #nn.ReLU(),
         )
         
+        #self.l_enc_m = nn.Sequential(nn.Linear(self.c_hidden, 1,  bias=True),
+        #                             nn.BatchNorm1d(1, momentum=0.01,eps=0.001),
+        #                             nn.Softplus()
+        #                            )
         self.l_enc_m = nn.Linear(self.c_hidden, 1)
         self.l_enc_logv = nn.Linear(self.c_hidden, 1)
         
@@ -129,38 +124,36 @@ class AVAE(nn.Module):
                  ):
         #library = torch.log(x.sum(1)).unsqueeze(1)
         # l is inferred from logrithmized x
-        
         x1=torch.log(1+x)
         hidden = self.l_enc(x1)
         ql_m = self.l_enc_m(hidden)
         ql_logv = self.l_enc_logv(hidden)
         ql = self.reparameterize(ql_m, ql_logv)
-        ql = torch.clamp(ql, min = 0.1)
-
+        ql = torch.clamp(ql, min = 0)
         #ql = torch.exp(library)
         # x is processed by dividing the inferred library
         
-        x_n = torch.log(1+x)
+        x_n = torch.log(1+x)-ql
         #x_n = x / (ql+1)#(ql+1)
         #x_n = x_n / (x_n.sum(axis=1, keepdims=True)+1) #* self.alpha
-        #x_n=torch.log(1+x) - ql
+        #x_n=torch.log(1+x_n)
         hidden = self.c_enc(x_n)
-        qc_m =  self.c_enc_m(hidden) 
-        #print('qc_m',qc_m)
+        qc_m =  self.c_enc_m(hidden)
         #qc_logv = self.c_enc_logv(hidden)
         # sampling qc 
         #print('qc_p=',qc_p)
         
-
+        #qc = Dirichlet(self.alpha * qc_m).rsample()[:,:,None]
         qc = Dirichlet(self.alpha * qc_m).rsample()[:,:,None]
+        
         hidden = self.z_enc(x_n)
         #hidden = self.z_enc(torch.concat([x_n,qc[:,:,0]],axis=1))
         #hidden = self.z_enc(qc)
-        qz_m_ct = self.z_enc_m(hidden).reshape([x1.shape[0],self.c_kn,self.c_bn])
+        qz_m_ct = self.z_enc_m(hidden).reshape([x_n.shape[0],self.c_kn,self.c_bn])
         qz_m_ct = (qc * qz_m_ct)
         
         qz_m = qz_m_ct.sum(axis=1)
-        qz_logv_ct = self.z_enc_logv(hidden).reshape([x1.shape[0],self.c_kn,self.c_bn])
+        qz_logv_ct = self.z_enc_logv(hidden).reshape([x_n.shape[0],self.c_kn,self.c_bn])
         qz_logv_ct = (qc * qz_logv_ct)
         
         qz_logv = qz_logv_ct.sum(axis=1)
@@ -186,41 +179,53 @@ class AVAE(nn.Module):
     def generative(self,
                    inference_outputs,
                    x,
-                   xs_k,
-                   library_i
-                   
+                   xs_k
                   ):
         
+        # libary is logrimized 
+        # library = torch.log(x.sum(1)).unsqueeze(1)
         qz = inference_outputs['qz']
         ql = inference_outputs['ql']
         ql_m = inference_outputs['ql_m']
         
         hidden = self.px_hidden_decoder(qz)
         px_scale = self.px_scale_decoder(hidden)
+        #px_scale = px_scale/px_scale.sum(axis=1,keepdims=True)
         px_rate = torch.exp(ql) * px_scale 
+        #weights = 1#10
+        #px_rate = qn * weights* px_scale 
         
+        ## pc_p = alpha * g1(x,n)
+        #alpha = 1e3
+        xs_k = (xs_k-xs_k.min())/(xs_k.max()-xs_k.min()) 
         
-        #xs_k = xs_k/torch.exp(library_i) * torch.exp(library_i.mean(axis=1,keepdims=True))
-        xs_k = xs_k / torch.exp(ql) * torch.exp(ql.mean(axis=1,keepdims=True))#* torch.exp(ql.min(axis=1,keepdims=True))
-        #xs_k = torch.log(xs_k+1e-5)
-        #xs_k = xs_k / (xs_k.sum(axis=1,keepdims=True)+1e-5)
-        #xs_k = xs_k-xs_k.min()
-        #xs_k = (xs_k-xs_k.min())/(xs_k.max()-xs_k.min()) 
-        #xs_k = (xs_k-xs_k.min())/(xs_k.max()-xs_k.min())
         pc_p = self.alpha * xs_k + 1e-5#(np.log(xs_k+1)+1e-5)
         
         #xs_k = torch.log((xs_k/(ql))+1)+1e-5
         #xs_k = torch.log(xs_k/ql)+1e-5
         #xs_k  = xs_k/ xs_k.max()
+        #activate = nn.Softmax()
+        #xs_k = activate(xs_k)
         #xs_k  = xs_k/ xs_k.sum(axis=1, keepdims=True)
+        #xs_k = torch.log(xs_k+1)+1e-5
+        #pc_p = xs_k
+        #pc_p = xs_k
+        #qz = inference_outputs['qz']
+        #qn = inference_outputs['qn']
+        #qn_m = inference_outputs['qn_m']
+        #qn_logv = inference_outputs['qn_logv']
+        #hidden = self.px_hidden_decoder(qz)
+        #px_scale = self.px_scale_decoder(hidden)
+        #px_rate = torch.exp(library) * px_scale 
+        #weights = 1#10
+        #px_rate = qn * weights* px_scale 
+        #px_r = self.px_r
         
 
         return dict(
                     px_rate=px_rate,
                     px_r=self.px_r,
-                    pc_p=pc_p,
-                    xs_k=xs_k,
-
+                    pc_p=pc_p
                    )
     
     
@@ -229,11 +234,12 @@ class AVAE(nn.Module):
             inference_outputs,
             x, 
             x_peri,
-            library,
-            device 
+            library   
         ):    
     
+        #library = torch.log(x.sum(1)).unsqueeze(1)
         qc_m = inference_outputs["qc_m"]
+        #qc_logv = inference_outputs["qc_logv"]
         qc = inference_outputs["qc"]
         
         qz_m = inference_outputs["qz_m"]
@@ -256,35 +262,19 @@ class AVAE(nn.Module):
             dim=1
         ).mean()
      
-        kl_divergence_n = kl(Normal(ql_m, torch.sqrt(torch.exp(ql_logv))), Normal(library,torch.ones_like(ql))).sum(
+        kl_divergence_n = kl(Normal(ql_m, torch.sqrt(torch.exp(ql_logv))), Normal(library,torch.ones_like(ql_m))).sum(
             dim=1
         ).mean()
         
         
         if (x_peri[:,0]==1).sum()>0:
-            
-            #kl_divergence_c = kl(Dirichlet(qc_m[x_peri[:,0]==1] *self.alpha2 * (ql[x_peri[:,0]==1]+1) ), *0.Dirichlet(pc_p[x_peri[:,0]==1])).mean()
-            kl_divergence_c = kl(Dirichlet(qc_m[x_peri[:,0]==1]*self.alpha), Dirichlet(pc_p[x_peri[:,0]==1])).mean()
-            #kl_divergence_c = kl(Dirichlet(qc_m*self.alpha), Dirichlet(pc_p)).mean()
-            if (x_peri[:,0]==0).sum()>0:
-                #kl_divergence_c = kl_divergence_c+(self.win_loglib.max()-self.win_loglib.min())*1e-2*kl(Dirichlet(qc_m[x_peri[:,0]==0]*self.alpha), Dirichlet(pc_p[x_peri[:,0]==0])).mean()
-                # para-dependent 
-                if ((x_peri[:,0]==0)&(library[:,0]<torch.quantile(self.win_loglib, 0.2))).sum()>0:
-                    kl_divergence_c = kl_divergence_c +  1e-1*kl(Dirichlet(qc_m[(x_peri[:,0]==0)&(library[:,0]<torch.quantile(self.win_loglib, 0.2))]*self.alpha), Dirichlet(pc_p[(x_peri[:,0]==0)&(library[:,0]<torch.quantile(self.win_loglib, 0.2))])).mean()
-                #    #kl(Dirichlet(qc_m[x_peri[:,0]==0]*self.alpha2 * (ql[x_peri[:,0]==0]+1) ), Dirichlet(pc_p[x_peri[:,0]==0])).mean()
-                if ((x_peri[:,0]==0)&(library[:,0]>=torch.quantile(self.win_loglib, 0.2))).sum()>0:
-                    kl_divergence_c = kl_divergence_c +  1e-2*kl(Dirichlet(qc_m[(x_peri[:,0]==0)&(library[:,0]>=torch.quantile(self.win_loglib, 0.2))]*self.alpha), Dirichlet(pc_p[(x_peri[:,0]==0)&(library[:,0]>=torch.quantile(self.win_loglib, 0.2))])).mean()
-                #kl(Dirichlet(qc_m[x_peri[:,0]==0]*self.alpha2 * (ql[x_peri[:,0]==0]+1) ), Dirichlet(pc_p[x_peri[:,0]==0])).mean()
+            kl_divergence_c = kl(Dirichlet(qc_m[x_peri[:,0]==1]*self.alpha2), Dirichlet(pc_p[x_peri[:,0]==1])).mean()
         else:
             kl_divergence_c = torch.Tensor([0.0])
 
         
         reconst_loss = -NegBinom(px_rate, torch.exp(px_r)).log_prob(x).sum(-1).mean()
         
-        reconst_loss = reconst_loss.to(device)
-        kl_divergence_z = kl_divergence_z.to(device)
-        kl_divergence_c = kl_divergence_c.to(device)
-        kl_divergence_n = kl_divergence_n.to(device)
         loss = reconst_loss + kl_divergence_z+ kl_divergence_c + kl_divergence_n
 
         return (loss,
@@ -355,18 +345,13 @@ def train(
         counter +=1
         x = x.float()
         x = x.to(device)
-        xs_k = xs_k.to(device)
-        x_peri = x_peri.to(device)
-        library_i = library_i.to(device)
-       
 
         #gene_sig_m = gene_sig_m+1e-5
         #gene_sig_m= gene_sig_m/gene_sig_m.sum(dim=1,keepdim=True)
         
         inference_outputs =  model.inference(x)
         #print('inference_outputs.shape',inference_outputs.shape)
-        
-        generative_outputs = model.generative(inference_outputs, x, xs_k,library_i)
+        generative_outputs = model.generative(inference_outputs, x, xs_k)
         
         (loss,
          reconst_loss,
@@ -377,8 +362,7 @@ def train(
                            inference_outputs,                                           
                            x,
                            x_peri,
-                           library_i,
-                           device
+                           library_i
                        )
         
         optimizer.zero_grad()
@@ -466,17 +450,17 @@ class NegBinom(Distribution):
     
     
     
-def model_eval(model,adata_sample, sig_mean, device,library_i,lib_low):
+def model_eval(model,adata_sample, sig_mean, device):
     
     model.eval()
-    library_i = torch.Tensor(library_i[:,None])
+
     x_valid = torch.Tensor(np.array(adata_sample.to_df()))
     x_valid = x_valid.to(device)
     gene_sig_exp_valid = torch.Tensor(np.array(sig_mean)).to(device)
     library = torch.log(x_valid.sum(1)).unsqueeze(1)
 
     inference_outputs =  model.inference(x_valid)
-    generative_outputs = model.generative(inference_outputs,library, gene_sig_exp_valid, library_i)
+    generative_outputs = model.generative(inference_outputs,library, gene_sig_exp_valid)
 
-    px = NegBinom(generative_outputs["px_rate"], torch.exp(generative_outputs["px_r"])).sample().detach().cpu().numpy()
+    px = NegBinom(generative_outputs["px_rate"], torch.exp(generative_outputs["px_r"])).sample().detach().numpy()
     return inference_outputs, generative_outputs, px
