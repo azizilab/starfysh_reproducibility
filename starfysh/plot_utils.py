@@ -1,7 +1,10 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
-import scanpy as sc
-import pandas as pd
+import seaborn as sns
+
+from scipy.stats import pearsonr, gaussian_kde
+from sklearn.metrics import r2_score
 
 
 def plot_anchor_spots(umap_plot,
@@ -25,6 +28,7 @@ def plot_anchor_spots(umap_plot,
     ax.grid(False)
     ax.axis('off')
 
+
 def plot_sp_anchor_spots(map_info,
                       pure_spots,
                       sig_mean,
@@ -44,9 +48,9 @@ def plot_sp_anchor_spots(map_info,
                bbox_to_anchor=(bbox_x,0.5),)
     ax.grid(False)
     ax.axis('off')
-    
-def plot_proportions(umap_df,proportions,idx, cmap = 'viridis'):
-    
+
+
+def plot_proportions(umap_df, proportions, idx, cmap='viridis'):
     fig,ax = plt.subplots(1,1,dpi=300,figsize=(2.5,2))
     plt.scatter(umap_df['umap1'],
                 umap_df['umap2'],
@@ -58,7 +62,104 @@ def plot_proportions(umap_df,proportions,idx, cmap = 'viridis'):
     plt.colorbar()
     ax.grid(False)
     ax.axis('off')
-    
+
+
+def plot_corr(y_true, y_pred, outdir=None, filename=None, is_sig_mean=False, savefig=False):
+    """
+    Calculate & plot correlation of cell proportion (or absolute cell abundance)
+    between ground-truth & predictions (both [S x F])
+    """
+    assert y_true.shape == y_pred.shape, 'Inconsistent dimension between ground-truth & prediction'
+
+    v1, v2 = y_true.values, y_pred.values
+    n_factors = v1.shape[1]
+    corr = np.zeros((n_factors, n_factors))
+
+    for i in range(n_factors):
+        for j in range(n_factors):
+            corr[i, j], _ = np.round(pearsonr(v1[:, i], v2[:, j]), 4)
+
+    fig, ax = plt.subplots(figsize=(3.2, 3.2), dpi=300)
+    g = sns.heatmap(corr, annot=True,
+                    cmap='RdBu_r', vmin=-1, vmax=1,
+                    cbar_kws={'label': 'Cell type proportion corr.'},
+                    ax=ax
+                    )
+
+    ax.set_xticks(np.arange(n_factors) + 0.5, labels=y_pred.columns, rotation=90)
+    ax.set_yticks(np.arange(n_factors) + 0.5, labels=y_true.columns, rotation=0)
+    if is_sig_mean:
+        ax.set_xlabel('Signature Mean')
+    else:
+        ax.set_xlabel('Estimated proportion')
+    ax.set_ylabel('Ground truth proportion')
+
+    plt.show()
+
+    if savefig and outdir is not None:
+        if filename is None:
+            filename = 'corr'
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+        fig.savefig(os.path.join(outdir, filename + '.eps'), transparent=True, bbox_indches='tight', format='eps')
+
+    return fig, ax
+
+
+def plot_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False):
+    """
+    Scatter plot of spot-wise proportion between ground-truth & predictions
+    """
+
+    assert y_true.shape == y_pred.shape, 'Inconsistent dimension between ground-truth & prediction'
+
+    n_factors = y_true.shape[1]
+    y_true_vals = y_true.values
+    y_pred_vals = y_pred.values
+
+    fig, axes = plt.subplots(1, n_factors, figsize=(2 * n_factors, 2.2), dpi=300)
+
+    for i, ax in enumerate(axes):
+        v1 = y_true_vals[:, i]
+        v2 = y_pred_vals[:, i]
+        v_stacked = np.vstack([v1, v2])
+        den = gaussian_kde(v_stacked)(v_stacked)
+
+        ax.scatter(v1, v2, c=den, s=1, cmap='turbo', vmax=den.max() / 3)
+
+        ax.set_aspect('equal')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.axis('equal')
+
+        # Only show ticks on the left and bottom spines
+        ax.yaxis.set_ticks_position('left')
+        ax.xaxis.set_ticks_position('bottom')
+
+        ax.set_title(y_pred.columns[i])
+        ax.annotate(r"$R^2$ = {:.3f}".format(r2_score(v1, v2)), (0.0, 0.9), fontsize=8)
+
+        ax.set_xlim([-0.1, 1.1])
+        ax.set_ylim([-0.1, 1.1])
+        ax.set_xticks(np.arange(0, 1.1, 0.5))
+        ax.set_yticks(np.arange(0, 1.1, 0.5))
+
+        ax.set_xlabel('Ground truth proportions')
+        ax.set_ylabel('Predicted proportions')
+
+    plt.tight_layout()
+    plt.show()
+
+    if savefig and outdir is not None:
+        if filename is not None:
+            filename = 'proportion_scatter'
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+        fig.savefig(os.path.join(outdir, filename + '.eps'), transparent=True, bbox_indches='tight', format='eps')
+
+    return fig, axes
+
+
 def plot_spatial_var(map_info,
                      adata_sample,
                      log_lib,
@@ -101,6 +202,7 @@ def pl_spatial_feature(adata_sample,
     
     pass
 
+
 def pl_umap_feature(adata_sample,
                map_info,
                feature, 
@@ -125,6 +227,7 @@ def pl_umap_feature(adata_sample,
     plt.axis('off')
     
     pass
+
 
 def pl_spatial_inf_feature(adata_sample,
                map_info,

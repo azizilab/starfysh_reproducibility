@@ -1,0 +1,454 @@
+import os
+
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import scipy.sparse as sparse
+import umap
+import skdim
+import logging
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from py_pcha import PCHA
+from matplotlib import rcParams
+from matplotlib.pyplot import cm, rc_context
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.spatial.distance import cdist
+from sklearn.decomposition import PCA
+from sklearn.neighbors import NearestNeighbors
+
+
+class ArchetypalAnalysis:
+    # Todo: implement non-linear archetype analysis with VAE, compare explainability with linear implementation
+    def __init__(self,
+                 adata_orig,
+                 verbose=True,
+                 outdir=None,
+                 filename=None,
+                 savefig=False,
+                 ):
+
+        # Normalize count matrix
+        adata = adata_orig.copy()
+        sc.pp.normalize_total(adata)
+        sc.pp.log1p(adata)
+
+        self.count = adata.X.A if isinstance(adata.X, sparse.csr_matrix) else adata.X
+        self.n_spots, self.n_genes = self.count.shape
+        self.verbose = verbose
+        self.adata = adata
+        self.outdir = outdir
+        self.filename = filename
+        self.savefig = savefig
+
+        self.archetype = None
+        self.major_archetype = None
+        self.major_idx = None
+        self.arche_dict = None
+        self.arche_df = None
+        self.U = None
+        self.U_3d = None
+
+    def compute_archetypes(self, pc_ratio=.05, r=20, display=False):
+        """
+        Estimate the upper bound of archetype count (k) by calculating intrinsic dimension
+        Compute hierarchical archetypes (major + raw) with given granularity
+
+        Parameters
+        ----------
+        pc_ratio ：float (default=10)
+            Ratio of gene dimension to represent `conditional_number` for ID estimation (Fisher Separability test)
+            Fisher Separability test select the top PCs with eigenvalues <= max(Eig) / conditional_number
+
+`       r : int
+            Resolution parameter to control granularity of major archetypes
+
+        display : bool
+            Whether to display Intrinsic Dimension (ID) estimation plots
+
+        Returns
+        -------
+        archetype : np.ndarray (dim=[K, G])
+            Raw archetypes as linear combination of subset of spot counts
+
+        arche_dict : dict
+            Hierarchical strucuture major_archetype -> its fine-grained neighbor archetypes
+
+        major_idx : int
+            Index of major archetypes among `k` raw candidates after merging
+        """
+        if self.verbose:
+            logging.info('Computing intrnsic dimension to estimate k...')
+
+        # Estimate ID
+        id_model = skdim.id.FisherS(conditional_number=int(self.n_genes*pc_ratio),
+                                    produce_plots=display,
+                                    verbose=self.verbose)
+        k = int(id_model.fit(self.count).dimension_)
+
+        # Compute raw archetypes
+        if self.verbose:
+            logging.info('Computing {0} archetypes...'.format(k))
+        X = self.count.T
+        archetype, _, _, _, ev = PCHA(X, noc=k, delta=0.1)
+        archetype = np.array(archetype).T
+
+        if self.verbose:
+            logging.info('Calculating UMAPs for counts+archetype...')
+        self.U = self._get_umap(ndim=2)
+        self.U_3d = self._get_umap(ndim=3)
+
+        # Merge raw archetypes to get major archetypes
+        if self.verbose:
+            logging.info('{0} variance explained by raw archetypes.\n'
+                         'Merging those within {1} NNs to get major archetypes'.format(np.round(ev, 4), r))
+        arche_dict, major_idx = self._merge_archetypes(r)
+        self.archetype = archetype
+        self.major_archetype = archetype[major_idx]
+        self.major_idx = major_idx
+        self.arche_dict = arche_dict
+        return archetype, arche_dict, major_idx
+
+    def _merge_archetypes(self, r):
+        """
+        Merge raw archetypes into major ones by removing candidate with `r`-step distance
+        from its previous identified neighbors
+        """
+        assert self.archetype is not None, "Please compute archetypes first!"
+
+        n_archetypes = self.archetype.shape[0]
+        X_concat = np.vstack([self.count, self.archetype])
+        nbrs = NearestNeighbors(n_neighbors=r).fit(X_concat)
+        nn_graph = nbrs.kneighbors_graph(X_concat)[1][self.n_spots:, 1:] # retrieve NN-graph of only archetype spots
+
+        idxs_to_remove = set()
+        arche_dict = {}
+        for i in range(n_archetypes):
+            if i not in idxs_to_remove:
+                query = np.arange(self.n_spots+i, self.n_spots+n_archetypes)
+                nbrs = np.setdiff1d(
+                    nn_graph[i][np.isin(nn_graph[i], query)] - self.n_spots,
+                    list(idxs_to_remove)  # avoid over-assign merged archetypes to multiple major archetypes
+                )
+                if len(nbrs) != 0:
+                    arche_dict[i] = np.insert(nbrs, 0, i)
+                    idxs_to_remove.update(nbrs)
+
+        major_idx = np.arange(n_archetypes)[~np.isin(np.arange(n_archetypes), list(idxs_to_remove))]
+        return arche_dict, major_idx
+
+    def find_archetypal_spots(self, n_neighbors=40, major=False):
+        """
+        Assign N-nearest-neighbor spots to each archetype as `archetypal spots` (archetype community)
+
+        Parameters
+        ----------
+        n_neighbors : int (default=40)
+            N nearest neighbors of each archetype for archetypal spots
+
+        major : bool
+            Whether to find NNs for only major archetypes
+
+        Returns
+        -------
+        arche_df : pd.DataFrame
+            Dataframe of archetypal spots
+        """
+        assert self.archetype is not None, "Please compute archetypes first!"
+        if self.verbose:
+            logging.info('Finding {} nearest neighbors for each archetype...'.format(n_neighbors))
+
+        nbr_dict = {}
+        archetype = self.major_archetype if major else self.archetype
+        for i, v in enumerate(archetype):
+            X_concat = np.vstack([self.count, v])
+            nbrs = NearestNeighbors(n_neighbors=n_neighbors+1).fit(X_concat)
+            nn_graph = nbrs.kneighbors(X_concat)[1][-1, 1:]  # find nbr indices of the attached archetype `v`
+            nbr_dict['arch_{}'.format(i)] = nn_graph
+
+        self.arche_df = pd.DataFrame(nbr_dict)
+        return self.arche_df
+
+    def find_markers(self, n_markers=30, display=False):
+        """
+        Find marker genes for each archetype community with wilcoxon rank sum test (in-group vs. out-of-group)
+
+        Parameters
+        ----------
+        n_markers : int
+            Number of top marker genes to find for each archetype community
+
+        Returns
+        -------
+        marker_df : pd.DataFrame
+            Dataframe of marker genes for each archetype community
+        """
+        assert self.arche_df is not None, "Please compute archetypes & assign nearest-neighbors first!"
+        if self.verbose:
+            logging.info('Finding {} top marker genes for each archetype...'.format(n_markers))
+
+        adata = self.adata.copy()
+        markers = []
+        for col in self.arche_df.columns:
+            # Annotate in-group (current archetype) vs. out-of-group
+            annots = np.zeros(self.n_spots, dtype=np.int64).astype(str)
+            annots[self.arche_df[col]] = col
+            adata.obs[col] = annots
+            adata.obs[col] = adata.obs[col].astype('category')
+
+            # Identify marker genes
+            sc.tl.rank_genes_groups(adata, col, method='wilcoxon')
+            markers.append(adata.uns['rank_genes_groups']['names'][col][:n_markers])
+
+            if display:
+                plt.rcParams['figure.figsize'] = (8, 3)
+                plt.rcParams['figure.dpi'] = 300
+                sc.pl.rank_genes_groups_violin(adata, groups=[col], n_genes=n_markers)
+
+        return pd.DataFrame(np.stack(markers, axis=1), columns=self.arche_df.columns)
+
+    def assign_archetypes(self, anchor_df, threshold=.20):
+        """
+        Assign best 1-1 mapping of archetype community to its closest anchor community (cell-type specific anchor spots)
+        With spot overlapping ratio >= threshold
+
+        Parameters
+        ----------
+        anchor_df : pd.DataFrame
+            Dataframe of anchor spot indices
+
+        threshold : float
+            Threshold to determine anchor-archetype mapping
+
+        Returns
+        -------
+        map_df : pd.DataFrame
+            DataFrame of overlapping spot ratio of each anchor `i` to archetype `j`
+
+        map_dict : dict
+            Dictionary of cell type -> mapped archetype
+        """
+        assert self.arche_df is not None, "Please compute archetypes & assign nearest-neighbors first!"
+
+        n_nbrs, n_archetypes = self.arche_df.shape
+        n_cell_types = anchor_df.shape[1]
+        map_ratio = np.zeros((n_cell_types, n_archetypes))
+        for i, cell_type in enumerate(anchor_df.columns):
+            for j, arche_label in enumerate(self.arche_df.columns):
+                n_overlap = len(set(anchor_df[cell_type]).intersection(set(self.arche_df[arche_label])))
+                map_ratio[i, j] = n_overlap / n_nbrs
+
+        match_idx = map_ratio.argmax(1)
+        map_df = pd.DataFrame(map_ratio, index=anchor_df.columns, columns=self.arche_df.columns)
+        map_dict = {
+            anchor_df.columns[k]: self.arche_df.columns[v]
+            for (k, v) in enumerate(match_idx)
+            if map_df.iloc[k, v] >= threshold
+        }
+        return map_df, map_dict
+
+    def find_distant_archetypes(self, anchor_df, map_dict=None, n=3):
+        """
+        Sort and return top n archetypes that are unmapped and farthest from anchor spots of know cell types
+        They are more likely to represent novel cell types / states
+
+        Parameters
+        ----------
+        anchor_df : pd.DataFrame
+            Dataframe of anchor spot indices
+
+        map_dict : dict
+            Dictionary of cell type -> mapped archetype
+
+        n : int
+            Number of distant archetypes to return
+
+        Returns
+        -------
+        distant_archetypes : list
+            List of archetype labels (farthest --> closest to anchors)
+        """
+        assert self.arche_df is not None, "Please compute archetypes & assign nearest-neighbors first!"
+
+        cell_types = anchor_df.columns
+        arche_lbls = self.arche_df.columns
+
+        # Find the unmapped archetypes
+        if map_dict is None:
+            _, map_dict = self.assign_archetypes(anchor_df=anchor_df)
+        unmapped_archetypes = np.setdiff1d(
+            arche_lbls,
+            list(set([v for k, v in map_dict.items()]))
+        )
+
+        # Sort unmapped archetypes in descending orders with avg. distance to its 2 closest anchor spot centroid
+        if n > len(unmapped_archetypes):
+            logging.warning('Insufficient candidates to find {0} distant archetypes\nSet n={1}'.format(
+                n, len(unmapped_archetypes)
+            ))
+        anchor_centroids = self.count[anchor_df[anchor_df.columns]].mean(0)
+        arche_centroids = self.count[self.arche_df[self.arche_df.columns]].mean(0)
+        dist_df = pd.DataFrame(
+            cdist(anchor_centroids, arche_centroids),
+            index=cell_types,
+            columns=arche_lbls
+        )
+        dist_unmapped = dist_df[unmapped_archetypes].values  # subset only distance to `unmapped` archetypes
+        dist_to_nbrs = np.sort(dist_unmapped, axis=0)[:2].mean(0)
+        distant_arches = [unmapped_archetypes[idx] for idx in np.argsort(-dist_to_nbrs)][:n] # dist - Discending order
+
+        return distant_arches
+
+    # -------------------
+    # Plotting functions
+    # -------------------
+
+    def _get_umap(self, ndim=2, random_state=0):
+        assert ndim == 2 or ndim == 3, "Invalid dimension for UMAP: {}".format(ndim)
+        X = np.vstack([self.count, self.archetype])
+        reducer = umap.UMAP(n_components=ndim, random_state=random_state)
+        U = reducer.fit_transform(X)
+        return U
+
+    def _save_fig(self, fig, lgds, default_name):
+        filename = self.filename if self.filename is not None else default_name
+        if not os.path.exists(self.outdir):
+            os.makedirs(self.outdir)
+        fig.savefig(os.path.join(self.outdir, filename+'.eps'), bbox_extra_artists=lgds, bbox_inches='tight', format='eps')
+
+    def plot_archetypes(self, major=True, do_3d=False, lgd_ncol=1, figsize=(6, 4)):
+        """
+        Display archetype & archetypal spot communities
+        """
+        assert self.arche_df is not None, "Please compute archetypes & assign nearest-neighbors first!"
+        n_archetypes = self.arche_df.shape[1]
+        arche_indices = self.major_idx if major else np.arange(n_archetypes)
+        U = self.U_3d if do_3d else self.U
+        colors = cm.tab20(np.linspace(0, 1, n_archetypes))
+
+        if do_3d:
+            fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300, subplot_kw=dict(projection='3d'))
+
+            # Color background spots & archetypal spots
+            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], s=0.5, alpha=0.2, c='gray')
+            for i, label in enumerate(self.arche_df.columns):
+                if i in arche_indices:
+                    idxs = self.arche_df[label]
+                    ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], marker='o', s=3, color=colors[i], label=label)
+
+            # Highlight archetype
+            idxs = self.n_spots + arche_indices
+            ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], s=5, c='r', marker='^')
+            for j, z in zip(arche_indices, U[idxs]):
+                ax.text(z[0], z[1], z[2], str(j))
+            lgd = ax.legend(loc='right', bbox_to_anchor=(0.5, 0, 1, 0.5), ncol=lgd_ncol)
+
+        else:
+            fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300)
+
+            # Color background & archetypal spots
+            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], s=0.5, c='gray')
+            for i, label in enumerate(self.arche_df.columns):
+                if i in arche_indices:
+                    idxs = self.arche_df[label]
+                    ax.scatter(U[idxs, 0], U[idxs, 1], marker='o', s=3, color=colors[i], label=label)
+
+            # Highlight archetype
+            idxs = self.n_spots + arche_indices
+            ax.scatter(U[idxs, 0], U[idxs, 1], s=5, c='r', marker='^')
+            for j, z in zip(arche_indices, U[idxs]):
+                ax.text(z[0], z[1], str(j))
+            lgd = ax.legend(loc='right', bbox_to_anchor=(1.5, 0.5), ncol=lgd_ncol)
+
+        if self.savefig and self.outdir is not None:
+            self._save_fig(fig, (lgd,), 'archetypes')
+        return fig, ax
+
+    def plot_anchor_archetype_clusters(self, anchor_df,
+                                       cell_types=None,
+                                       arche_lbls=None,
+                                       lgd_ncol=2,
+                                       do_3d=False
+                                       ):
+        """
+        Joint display subset of anchor spots & archetypal spots (to visualize overlapping degree)
+        """
+        assert self.arche_df is not None, "Please compute archetypes & assign nearest-neighbors first!"
+
+        U = self.U_3d if do_3d else self.U
+        cell_types = anchor_df.columns if cell_types is None else np.intersect1d(cell_types, anchor_df.columns)
+        arche_lbls = self.arche_df.columns if arche_lbls is None else np.intersect1d(arche_lbls, self.arche_df.columns)
+
+        anchor_colors = cm.Pastel1(np.linspace(0, 1, len(cell_types)))
+        arche_colors = cm.Pastel2(np.linspace(0, 1, len(arche_lbls)))
+
+        if do_3d:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), dpi=300, subplot_kw=dict(projection='3d'))
+
+            # Display anchors
+            ax1.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], c='gray', marker='.', s=1, alpha=0.2)
+            for c, label in zip(anchor_colors, cell_types):
+                idxs = anchor_df[label]
+                ax1.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='^', s=5, alpha=0.6, label=label)
+            ax1.grid(False)
+            lgd1 = ax1.legend(loc='lower center', bbox_to_anchor=(0.5, -1), ncol=lgd_ncol)
+
+            # Display archetypal spots
+            ax2.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], c='gray', marker='.', s=1, alpha=0.2)
+            for c, label in zip(arche_colors, arche_lbls):
+                idxs = self.arche_df[label]
+                ax2.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='o', s=3, alpha=0.6, label=label)
+
+            # Highlight selected archetypes
+            for label in self.arche_df.columns:
+                idx = int(label.split('_')[-1])
+                z = U[self.n_spots + idx, :]
+                ax2.text(z[0], z[1], z[2], str(idx))
+            lgd2 = ax2.legend(loc='lower center', bbox_to_anchor=(0.5, -1), ncol=lgd_ncol)
+
+        else:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3), dpi=300)
+
+            # Display anchors
+            ax1.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], c='gray', marker='.', s=1, alpha=0.2)
+            for c, label in zip(anchor_colors, cell_types):
+                idxs = anchor_df[label]
+                ax1.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='^', s=5, alpha=0.6, label=label)
+            lgd1 = ax1.legend(loc='lower center', bbox_to_anchor=(0.5, -1.75), ncol=lgd_ncol)
+
+            # Display archetypal spots
+            ax2.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], c='gray', marker='.', s=1, alpha=0.2)
+            for c, label in zip(arche_colors, arche_lbls):
+                idxs = self.arche_df[label]
+                ax2.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='o', s=3, alpha=0.6, label=label)
+            lgd2 = ax2.legend(loc='lower center', bbox_to_anchor=(0.5, -1.85), ncol=lgd_ncol)
+
+            # Display selected archetypes
+            for label in self.arche_df.columns:
+                idx = int(label.split('_')[-1])
+                z = U[self.n_spots + idx, :]
+                ax2.text(z[0], z[1], str(idx))
+
+        if self.savefig and self.outdir is not None:
+            self._save_fig(fig, (lgd1, lgd2), 'anchor_archetypal_spots')
+        return fig, (ax1, ax2)
+
+    def plot_mapping(self, map_df, figsize=(6, 5)):
+        """
+        Display anchor - archetype mapping (overlapping # spot ratio)
+        """
+        filename = 'cluster' if self.filename is None else self.filename
+        g = sns.clustermap(map_df, method='ward', vmin=0, vmax=1,
+                           figsize=figsize, xticklabels=True, yticklabels=True, annot_kws={'size': 15})
+        text = g.ax_heatmap.set_title('Proportion of Overlapped Spots (k={})'.format(map_df.shape[1]),
+                                      fontsize=20, x=0.6, y=1.3)
+        # g.ax_row_dendrogram.set_visible(False)
+        # g.ax_col_dendrogram.set_visible(False)
+
+        if self.savefig and self.outdir is not None:
+            if not os.path.exists(self.outdir):
+                os.makedirs(self.outdir)
+            g.figure.savefig(os.path.join(self.outdir, filename + '.eps'),
+                             bbox_extra_artists=(text,), bbox_inches='tight', format='eps')
+        return g
