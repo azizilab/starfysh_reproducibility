@@ -6,6 +6,7 @@ import pandas as pd
 import scanpy as sc
 import torch
 import torch.nn as nn
+
 from sklearn.neighbors import NearestNeighbors
 from sklearn.linear_model import LinearRegression
 from torch.utils.data import DataLoader
@@ -221,10 +222,12 @@ def preprocess(adata_raw, lognorm=True, min_perc=None, max_perc=None, n_top_gene
         print('Skip Normalize and Logarithm')
 
     # Preprocessing4: Find the variable genes
+    adata2 = adata.copy()
     print('Preprocessing4: Find the variable genes')
     sc.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=n_top_genes, inplace=True)
-
-    return adata
+    adata.var['highly_variable']['PDCD1']=True # TODO: We need to mute the hard-coded HVG threshold in public version
+    adata2.var = adata.var
+    return adata2
 
 
 def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
@@ -245,19 +248,16 @@ def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
                   'eosin',  # cytoplasm stain
                   'null']  # set to null if input contains only two stains
         # create stain matrix
-        # create stain matrix
         W = np.array([stain_color_map[st] for st in stains]).T
+        
         # perform standard color deconvolution
         imDeconvolved = htk.preprocessing.color_deconvolution.color_deconvolution(adata_image_norm, W)
 
-        adata_image_h = imDeconvolved.Stains[:, :, 0]
-        adata_image_e = imDeconvolved.Stains[:, :, 2]
-        adata_image_h = (
-                (adata_image_h - adata_image_h.min()) / (adata_image_h.max() - adata_image_h.min()) * 255).astype(
-            np.uint8)
-        adata_image_e = (
-                (adata_image_e - adata_image_e.min()) / (adata_image_e.max() - adata_image_e.min()) * 255).astype(
-            np.uint8)
+        adata_image_h = imDeconvolved.Stains[:,:,0]
+        adata_image_e = imDeconvolved.Stains[:,:,2]
+        
+        adata_image_h = ((adata_image_h - adata_image_h.min()) / (adata_image_h.max()-adata_image_h.min()) *255).astype(np.uint8)
+        adata_image_e = ((adata_image_e - adata_image_e.min()) / (adata_image_e.max()-adata_image_e.min()) *255).astype(np.uint8)
 
         # clahe = cv2.createCLAHE(clipLimit=20.0, tileGridSize=(20,20))
         # clahe = cv2.createCLAHE(clipLimit=10.0, tileGridSize=(10,10)) 2021-01-05
@@ -268,8 +268,7 @@ def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
 
         adata_image_h = (adata_image_h - adata_image_h.min()) / (adata_image_h.max() - adata_image_h.min())
         adata_image_e = (adata_image_e - adata_image_e.min()) / (adata_image_e.max() - adata_image_e.min())
-    # adata_image = np.clip(adata_image, 0.2, 0.8)
-    # adata_image = (adata_image - adata_image.min())/(adata_image.max()-adata_image.min())
+
     else:
         adata_image = io.imread(os.path.join(data_path, sample_id, 'spatial', 'tissue_hires_image.png'))
         # adata_image = (adata_image-adata_image.min())/(adata_image.max()-adata_image.min())
@@ -283,8 +282,7 @@ def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
     f.close()
     tissue_hires_scalef = json_info['tissue_hires_scalef']
 
-    tissue_position_list = pd.read_csv(os.path.join(data_path, sample_id, 'spatial', 'tissue_positions_list.csv'),
-                                       header=None, index_col=0)
+    tissue_position_list = pd.read_csv(os.path.join(data_path, sample_id, 'spatial', 'tissue_positions_list.csv'), header=None, index_col=0)
     tissue_position_list = tissue_position_list.loc[adata_index, :]
     map_info = tissue_position_list.iloc[:, 1:3]
     map_info.columns = ['array_row', 'array_col']
@@ -366,9 +364,9 @@ def get_sig_mean(adata_sample, gene_sig, log_lib):
                 (adata_df.loc[:, np.intersect1d(adata_sample.var_names, np.unique(gene_sig.iloc[:, i].astype(str)))]),
                 axis=1)
         else:
-            gene_sig_exp_m[gene_sig.columns[i]] = np.log((adata_sample_pre.to_df().loc[:,
-                                                          np.intersect1d(adata_sample_pre.var_names, np.unique(
-                                                              gene_sig.iloc[:, i].astype(str)))] + 1)).mean(axis=1)
+            gene_sig_exp_m[gene_sig.columns[i]] = np.log(
+                (adata_sample_pre.to_df().loc[:, np.intersect1d(adata_sample_pre.var_names, np.unique(gene_sig.iloc[:, i].astype(str)))] + 1)
+            ).mean(axis=1)
 
     # gene_sig_exp_arr = torch.Tensor(np.array(gene_sig_exp_m))
     # gene_sig_exp_arr = gene_sig_exp_arr.detach().cpu().numpy()
@@ -382,7 +380,8 @@ def filter_gene_sig(gene_sig, adata_df):
         for j in range(gene_sig.shape[1]):
             gene = gene_sig.iloc[i, j]
             if gene in adata_df.columns:
-                if adata_df.loc[:, gene].sum() < 20:
+                # We don't filter signature genes based on expression level (prev: threshold=20)
+                if adata_df.loc[:, gene].sum() < 0: 
                     gene_sig.iloc[i, j] = 'NaN'
     return gene_sig
 

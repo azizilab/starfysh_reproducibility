@@ -51,12 +51,8 @@ class AVAE(nn.Module):
         self.c_bn = 10 # c_bn : latent number, numbers of bottle neck
         self.c_hidden = 256
         self.c_kn = gene_sig.shape[1]
-
-        #self.alpha = torch.nn.Parameter(torch.rand(1)*1e2,requires_grad=True)
-        #self.alpha = torch.nn.Parameter(torch.rand(1)*1e2+alpha_min,requires_grad=True)
+        
         self.alpha = torch.nn.Parameter(torch.rand(self.c_kn)*1e3,requires_grad=True)
-        #self.alpha2 = torch.nn.Parameter(torch.rand(self.c_kn)*1e2,requires_grad=True)
-        #self.alpha2 = torch.nn.Parameter(torch.rand(1)*1e3,requires_grad=True)
 
         
         self.c_enc = nn.Sequential(
@@ -130,12 +126,12 @@ class AVAE(nn.Module):
         #library = torch.log(x.sum(1)).unsqueeze(1)
         # l is inferred from logrithmized x
         
-        x1=torch.log(1+x)
-        hidden = self.l_enc(x1)
+        x_n = torch.log(1+x)
+        hidden = self.l_enc(x_n)
         ql_m = self.l_enc_m(hidden)
         ql_logv = self.l_enc_logv(hidden)
         ql = self.reparameterize(ql_m, ql_logv)
-        ql = torch.clamp(ql, min = 0.1)
+        ql = torch.clamp(ql, min = 0.01)
 
         #ql = torch.exp(library)
         # x is processed by dividing the inferred library
@@ -156,11 +152,11 @@ class AVAE(nn.Module):
         hidden = self.z_enc(x_n)
         #hidden = self.z_enc(torch.concat([x_n,qc[:,:,0]],axis=1))
         #hidden = self.z_enc(qc)
-        qz_m_ct = self.z_enc_m(hidden).reshape([x1.shape[0],self.c_kn,self.c_bn])
+        qz_m_ct = self.z_enc_m(hidden).reshape([x_n.shape[0],self.c_kn,self.c_bn])
         qz_m_ct = (qc * qz_m_ct)
         
         qz_m = qz_m_ct.sum(axis=1)
-        qz_logv_ct = self.z_enc_logv(hidden).reshape([x1.shape[0],self.c_kn,self.c_bn])
+        qz_logv_ct = self.z_enc_logv(hidden).reshape([x_n.shape[0],self.c_kn,self.c_bn])
         qz_logv_ct = (qc * qz_logv_ct)
         
         qz_logv = qz_logv_ct.sum(axis=1)
@@ -465,7 +461,6 @@ class NegBinom(Distribution):
         return ll
     
     
-    
 def model_eval(model,adata_sample, sig_mean, device,library_i,lib_low):
     
     model.eval()
@@ -480,3 +475,20 @@ def model_eval(model,adata_sample, sig_mean, device,library_i,lib_low):
 
     px = NegBinom(generative_outputs["px_rate"], torch.exp(generative_outputs["px_r"])).sample().detach().cpu().numpy()
     return inference_outputs, generative_outputs, px
+
+
+def model_ct_exp(model,adata_sample, sig_mean, device,library_i,lib_low,ct_idx):
+
+    model.eval()
+    library_i = torch.Tensor(library_i[:,None])
+    x_valid = torch.Tensor(np.array(adata_sample.to_df()))
+    x_valid = x_valid.to(device)
+    gene_sig_exp_valid = torch.Tensor(np.array(sig_mean)).to(device)
+    library = torch.log(x_valid.sum(1)).unsqueeze(1)
+
+    inference_outputs =  model.inference(x_valid)
+    inference_outputs['qz'] = inference_outputs['qz_m_ct'][:,ct_idx,:]
+    generative_outputs = model.generative(inference_outputs,library, gene_sig_exp_valid, library_i)
+
+    px = NegBinom(generative_outputs["px_rate"], torch.exp(generative_outputs["px_r"])).sample().detach().cpu().numpy()
+    return px
