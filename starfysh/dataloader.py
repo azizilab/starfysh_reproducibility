@@ -1,10 +1,14 @@
 import numpy as np
 import pandas as pd
+import logging
 import torch
 from torch.utils.data import Dataset
 
 
 class VisiumDataset(Dataset):
+    """
+    Loading preprocessed Visium AnnData, gene signature & Anchor spots for Starfysh training
+    """
 
     def __init__(self, adata, gene_sig_exp_m, adata_pure, library_n):
         spots = adata.obs_names
@@ -35,3 +39,4 @@ class VisiumDataset(Dataset):
                 torch.Tensor(self.adata_pure[idx,:]),
                 torch.Tensor(self.library_n[idx,None]),
                )
+    

@@ -4,17 +4,101 @@ import json
 import numpy as np
 import pandas as pd
 import scanpy as sc
+# import logging
+
 import torch
 import torch.nn as nn
+import torch.optim as optim
 
 from sklearn.neighbors import NearestNeighbors
 from sklearn.linear_model import LinearRegression
+from scipy.stats import zscore
 from torch.utils.data import DataLoader
+
 import sys
 # import histomicstk as htk
 from skimage import io
 
-from starfysh import AVAE, train
+# Module import
+from starfysh import LOGGER
+from .starfysh import AVAE, train
+from .dataloader import VisiumDataset 
+
+
+# --------------------------------
+# Data-preprocessing arguments
+# --------------------------------
+
+class VisiumArguments:
+    """
+    Loading Visium AnnData, perform preprocessing, library-size smoothing & Anchor spot detection
+    """
+    
+    def __init__(self, adata, adata_norm, gene_sig, map_info, **kwargs):
+        self.adata = adata
+        self.adata_norm = adata_norm
+        self.gene_sig = gene_sig
+        # self.gene_sig = filter_gene_sig(self.gene_sig) # filter low-expr genes (for now mute it)
+        
+        self.params = {
+            'n_anchors': 40,            
+            'vlow': 10,
+            'vhigh': 95,
+            'window_size': 30            
+        }
+        
+        # Update parameters for library smoothing & anchor spot identification
+        for k, v in kwargs:
+            if k in self.params.keys():
+                self.params[k] = v
+        
+        # Filter out signature genes X listed in expression matrix
+        LOGGER.info('Filtering signatures not highly variable...')
+        self.adata = get_adata_wsig(adata, gene_sig)
+        self.adata_norm = get_adata_wsig(adata_norm, gene_sig)    
+        
+        # Get smoothed library size
+        LOGGER.info('Smoothing library size by taking averaging with neighbor spots...')
+        self.log_lib = np.log1p(self.adata.X.sum(1))
+        self.win_loglib = get_windowed_library(self.adata, 
+                                               map_info,
+                                               self.log_lib,
+                                               window_size=self.params['window_size']
+                                              )
+        
+        # Retrieve & Z-norm signature gexp
+        LOGGER.info('Retrieving & normalizing signature gene expressions...')
+        sig_mean = get_sig_mean(self.adata,
+                                gene_sig,
+                                self.log_lib)
+        self.sig_mean = znorm_sigs(sig_mean)
+        
+        # Get anchor spots
+        LOGGER.info('Identifying anchor spots (highly expression of specific cell-type signatures)...') 
+        anchor_info = get_anchor_spots(self.adata,
+                                       self.sig_mean,
+                                       v_low=self.params['vlow'],
+                                       v_high=self.params['vhigh'],
+                                       n_anchor=self.params['n_anchors']
+                                      )
+        self.pure_spots, self.pure_dict, self.pure_idx = anchor_info
+        # TODO: what does the following ling mean? (I assume all selected genes are HVGs)
+        self.adata.var['highly_variable'] = True
+        
+        # Calculate alpha mean
+        self.alpha_min = get_alpha_min(self.sig_mean, self.pure_dict)
+        
+    def get_adata(self):
+        """Return adata after preprocessing & HVG gene selection"""
+        return self.adata, self.adata_norm
+    
+    def get_anchors(self):
+        """Return indices of anchor spots for each cell type"""
+        anchors_df = pd.DataFrame.from_dict(self.pure_dict, orient='columns')
+        return anchors_df.applymap(
+            lambda x: 
+            np.where(self.adata.obs.index == x)[0][0] # TODO: make sure adata.obs index is formatted as "location_i"
+        )
 
 
 # --------------------------------
@@ -32,22 +116,7 @@ def init_weights(module):
         module.weight.data.fill_(1.0)
 
 
-def get_alpha_min(sig_mean, pure_dict):
-    """Calculate alpha_min for Dirichlet dist. for each factor"""
-    alpha_min = 0
-    for col_idx in sig_mean.columns:
-        if (1 / (sig_mean.loc[pure_dict[col_idx], :] / sig_mean.loc[pure_dict[col_idx], :].sum())[col_idx]).max() > alpha_min:
-            alpha_min = (1 / (sig_mean.loc[pure_dict[col_idx], :] / sig_mean.loc[pure_dict[col_idx], :].sum())[col_idx]).max()
-    return alpha_min
-
-
-def run_starfysh(adata,
-                 dataloader,
-                 gene_sig,
-                 sig_mean,
-                 win_loglib,
-                 pure_dict,
-                 pure_idx,
+def run_starfysh(visium_args,
                  n_repeats=3,
                  lr=0.001,
                  epochs=50,
@@ -65,13 +134,20 @@ def run_starfysh(adata,
 
     np.random.seed(0)
     max_patience = patience
-    alpha_min = get_alpha_min(sig_mean, pure_dict)
+    
+    # Loading parameters
+    adata = visium_args.adata
+    alpha_min = visium_args.alpha_min
+    win_loglib = visium_args.win_loglib
+    gene_sig, sig_mean = visium_args.gene_sig, visium_args.sig_mean
+    pure_dict, pure_idx = visium_args.pure_dict, visium_args.pure_idx
+    
 
     models = [None] * n_repeats
     losses = []
     loss_c_list = np.repeat(np.inf, n_repeats)
 
-    trainset = dataloader.VisiumDataset(
+    trainset = VisiumDataset(
         adata=adata,
         gene_sig_exp_m=sig_mean,
         adata_pure=pure_idx,
@@ -84,9 +160,11 @@ def run_starfysh(adata,
         shuffle=True
     )
 
+    # Running Starfysh with multiple starts
+    LOGGER.info('Running Starfysh with {} restarts, choose the model with best parameters...'.format(n_repeats))
     for i in range(n_repeats):
         if verbose:
-            print(" ===  Restart Starfysh {0} === \n".format(i + 1))
+            LOGGER.info(" ===  Restart Starfysh {0} === \n".format(i + 1))
 
         patience = max_patience
 
@@ -110,7 +188,7 @@ def run_starfysh(adata,
 
         # Initialize model params
         if verbose:
-            print('Initializing model parameters...')
+            LOGGER.info('Initializing model parameters...')
         model.apply(init_weights)
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
@@ -118,7 +196,7 @@ def run_starfysh(adata,
             if patience == 0:
                 loss_c_list[i] = best_loss_c
                 if verbose:
-                    print('Saving best-performing model; Early stopping...')
+                    LOGGER.info('Saving best-performing model; Early stopping...')
                 break
 
             result = train(
@@ -148,14 +226,15 @@ def run_starfysh(adata,
             loss_dict['n'].append(loss_n)
 
             if (epoch + 1) % 10 == 0 or patience == 0:
-                print(
-                    "Epoch[{}/{}], train_loss: {:.4f}, train_reconst: {:.4f}, train_z: {:.4f},train_c: {:.4f},train_n: {:.4f}".format(
-                        epoch + 1, epochs, loss_tot, loss_reconst, loss_z, loss_c, loss_n))
+                if verbose:
+                    LOGGER.info("Epoch[{}/{}], train_loss: {:.4f}, train_reconst: {:.4f}, train_z: {:.4f},train_c: {:.4f},train_n: {:.4f}".format(
+                        epoch + 1, epochs, loss_tot, loss_reconst, loss_z, loss_c, loss_n)
+                    )
 
         losses.append(loss_dict)
 
-        if epoch:
-            print(" === Finished training === \n")
+        if verbose:
+            LOGGER.info(" === Finished training === \n")
 
     idx = np.argmin(loss_c_list)
     best_model = models[idx]
@@ -168,7 +247,32 @@ def run_starfysh(adata,
 # Preprocessing & IO
 # -------------------
 
-def preprocess(adata_raw, lognorm=True, min_perc=None, max_perc=None, n_top_genes=6000, mt_thld=100):
+
+def get_alpha_min(sig_mean, pure_dict):
+    """Calculate alpha_min for Dirichlet dist. for each factor"""
+    alpha_min = 0
+    for col_idx in sig_mean.columns:
+        if (1 / (sig_mean.loc[pure_dict[col_idx], :] / sig_mean.loc[pure_dict[col_idx], :].sum())[col_idx]).max() > alpha_min:
+            alpha_min = (1 / (sig_mean.loc[pure_dict[col_idx], :] / sig_mean.loc[pure_dict[col_idx], :].sum())[col_idx]).max()
+    return alpha_min
+
+
+def znorm_sigs(sig_mean, eps=1e-12):
+    """Z-normalize average expressions for each gene"""
+    sig_mean_zscore = sig_mean.apply(zscore, axis=0)
+    sig_mean_zscore -= sig_mean_zscore.min(0)
+    sig_mean_zscore = sig_mean_zscore.fillna(0)
+    return sig_mean_zscore
+    
+
+def preprocess(adata_raw, 
+               lognorm=True, 
+               min_perc=None,
+               max_perc=None, 
+               n_top_genes=6000, 
+               mt_thld=100,
+               verbose=True
+              ):
     """
     author: Yinuo Jin
     Preprocessing ST gexp matrix, remove Ribosomal & Mitochondrial genes
@@ -178,10 +282,13 @@ def preprocess(adata_raw, lognorm=True, min_perc=None, max_perc=None, n_top_gene
         Spot x Bene raw expression matrix [S x G]
     min_perc : float
         lower-bound percentile of non-zero gexps for filtering spots
+        
     max_perc : float
         upper-bound percentile of non-zero gexps for filtering spots
+        
     n_top_genes: float
         number of the variable genes
+        
     mt_thld : float
         max. percentage of mitochondrial gexps for filtering spots
         with excessive MT expressions
@@ -198,7 +305,8 @@ def preprocess(adata_raw, lognorm=True, min_perc=None, max_perc=None, n_top_gene
     # Remove cells with excessive MT expressions
     # Remove MT & RB genes
 
-    print('Preprocessing1: delete the mt and rp')
+    if verbose:
+        LOGGER.info('Preprocessing1: delete the mt and rp')
     adata.var['mt'] = adata.var_names.str.startswith('MT-')
     adata.var['rb'] = np.logical_or(
         adata.var_names.str.startswith('RPS'),
@@ -212,20 +320,24 @@ def preprocess(adata_raw, lognorm=True, min_perc=None, max_perc=None, n_top_gene
     adata = adata[mask_cell, mask_gene]
 
     if lognorm:
-        print('Preprocessing2: Normalize')
+        if verbose:
+            LOGGER.info('Preprocessing2: Normalize')
         sc.pp.normalize_total(adata, inplace=True)
 
         # Preprocessing3: Logarithm
-        print('Preprocessing3: Logarithm')
+        if verbose:
+            LOGGER.info('Preprocessing3: Logarithm')
         sc.pp.log1p(adata)
     else:
-        print('Skip Normalize and Logarithm')
+        if verbose:
+            LOGGER.info('Skip Normalize and Logarithm')
 
     # Preprocessing4: Find the variable genes
     adata2 = adata.copy()
-    print('Preprocessing4: Find the variable genes')
+    if verbose:
+        LOGGER.info('Preprocessing4: Find the variable genes')
     sc.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=n_top_genes, inplace=True)
-    adata.var['highly_variable']['PDCD1']=True # TODO: We need to mute the hard-coded HVG threshold in public version
+    adata.var['highly_variable']['PDCD1']=True # TODO: We need to avoid the hard-coded HVG threshold in public version
     adata2.var = adata.var
     return adata2
 
@@ -294,22 +406,27 @@ def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
     return adata_image, map_info
 
 
-def gene_for_train(adata, df_sig):
+def gene_for_train(adata, df_sig, verbose=True):
     """find the varibale gene name, the mattered gene signatures, and the combined variable+signature for training"""
 
     variable_gene = adata.var_names[adata.var['highly_variable']]
-    print('the number of original variable genes in the dataset', variable_gene.shape)
-    print('the number of siganture genes in the dataset', np.unique(df_sig.values.flatten().astype(str)).shape)
+    if verbose:
+        print('\t The number of original variable genes in the dataset', variable_gene.shape)
+        print('\t The number of siganture genes in the dataset', np.unique(df_sig.values.flatten().astype(str)).shape)
 
     # filter out some genes in the signature not in the var_names
     sig_gname_filtered = np.intersect1d(adata.var_names, np.unique(df_sig.values.flatten().astype(str)))
-    print('after filter out some genes in the signature not in the var_names ...', sig_gname_filtered.shape)
+    if verbose:
+        print('\t After filter out some genes in the signature not in the var_names ...', sig_gname_filtered.shape)
+    
     # filter out some genes not highly expressed in the signature
     sig_gname_filtered = sig_gname_filtered[adata.to_df().loc[:, sig_gname_filtered].sum() > 0]
-    print('after filter out some genes not highly expressed in the signature ...', sig_gname_filtered.shape)
+    if verbose:
+        print('\t After filter out some genes not highly expressed in the signature ...', sig_gname_filtered.shape)
 
     sig_variable_gene_inter = set([*np.array(variable_gene), *sig_gname_filtered])
-    print('combine the varibale and siganture, the total unique gene number is ...', len(sig_variable_gene_inter))
+    if verbose:
+        print('\t Combine the varibale and siganture, the total unique gene number is ...', len(sig_variable_gene_inter))
 
     return list(variable_gene), list(sig_gname_filtered), list(sig_variable_gene_inter)
 
@@ -399,35 +516,35 @@ def get_anchor_spots(adata_sample,
         v_high: the high threshold
         n_anchor: number of anchor spots 
     """
-    highq_spots = (((adata_sample.to_df() > 0).sum(axis=1) > np.percentile((adata_sample.to_df() > 0).sum(axis=1),
-                                                                           v_low)) &
-                   ((adata_sample.to_df()).sum(axis=1) > np.percentile((adata_sample.to_df()).sum(axis=1), v_low)) &
-                   ((adata_sample.to_df() > 0).sum(axis=1) < np.percentile((adata_sample.to_df() > 0).sum(axis=1),
-                                                                           v_high)) &
+    highq_spots = (((adata_sample.to_df() > 0).sum(axis=1) > np.percentile((adata_sample.to_df() > 0).sum(axis=1), v_low))  &
+                   ((adata_sample.to_df()).sum(axis=1) > np.percentile((adata_sample.to_df()).sum(axis=1), v_low))          &
+                   ((adata_sample.to_df() > 0).sum(axis=1) < np.percentile((adata_sample.to_df() > 0).sum(axis=1), v_high)) &
                    ((adata_sample.to_df()).sum(axis=1) < np.percentile((adata_sample.to_df()).sum(axis=1), v_high))
-                   )
+                  )
+    
     pure_spots = np.transpose(
-        sig_mean.loc[highq_spots, :].index[(-np.array(sig_mean.loc[highq_spots, :])).argsort(axis=0)[:n_anchor, :]])
-
+        sig_mean.loc[highq_spots, :].index[
+            (-np.array(sig_mean.loc[highq_spots, :])).argsort(axis=0)[:n_anchor, :]
+        ]
+    )
     pure_dict = {
         ct: spot
         for (spot, ct) in zip(pure_spots, sig_mean.columns)
     }
 
-    perif_dict = pure_dict
-
     adata_pure = np.zeros([adata_sample.n_obs, 1])
     adata_pure_idx = [np.where(adata_sample.obs_names == i)[0][0] for i in
-                      sorted({x for v in perif_dict.values() for x in v})]
+                      sorted({x for v in pure_dict.values() for x in v})]
     adata_pure[adata_pure_idx] = 1
     return pure_spots, pure_dict, adata_pure
 
 
-def get_umap(adata_sample):
+def get_umap(adata_sample, display=False):
     sc.tl.pca(adata_sample, svd_solver='arpack')
     sc.pp.neighbors(adata_sample, n_neighbors=15, n_pcs=40)
     sc.tl.umap(adata_sample, min_dist=0.2)
-    sc.pl.umap(adata_sample)
+    if display:
+        sc.pl.umap(adata_sample)
     umap_plot = pd.DataFrame(adata_sample.obsm['X_umap'],
                              columns=['umap1', 'umap2'],
                              index=adata_sample.obs_names)
@@ -449,7 +566,6 @@ def get_windowed_library(adata_sample, map_info, library, window_size):
         window_size = window_size
         dist_arr = np.sqrt((map_info.loc[:, 'array_col'] - map_info.loc[i, 'array_col']) ** 2 + (
                 map_info.loc[:, 'array_row'] - map_info.loc[i, 'array_row']) ** 2)
-        dist_arr < window_size
         library_n.append(library[dist_arr < window_size].mean())
     library_n = np.array(library_n)
     return library_n

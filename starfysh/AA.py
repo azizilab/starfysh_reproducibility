@@ -1,12 +1,10 @@
 import os
-
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import scipy.sparse as sparse
 import umap
 import skdim
-import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -17,6 +15,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
+
+from starfysh import LOGGER
 
 
 class ArchetypalAnalysis:
@@ -79,7 +79,7 @@ class ArchetypalAnalysis:
             Index of major archetypes among `k` raw candidates after merging
         """
         if self.verbose:
-            logging.info('Computing intrnsic dimension to estimate k...')
+            LOGGER.info('Computing intrnsic dimension to estimate k...')
 
         # Estimate ID
         id_model = skdim.id.FisherS(conditional_number=int(self.n_genes*pc_ratio),
@@ -89,23 +89,19 @@ class ArchetypalAnalysis:
 
         # Compute raw archetypes
         if self.verbose:
-            logging.info('Computing {0} archetypes...'.format(k))
+            LOGGER.info('Computing {0} archetypes...'.format(k))
         X = self.count.T
         archetype, _, _, _, ev = PCHA(X, noc=k, delta=0.1)
-        archetype = np.array(archetype).T
-
-        if self.verbose:
-            logging.info('Calculating UMAPs for counts+archetype...')
+        self.archetype = np.array(archetype).T
+            LOGGER.info('Calculating UMAPs for counts + Archetypes...')
         self.U = self._get_umap(ndim=2)
         self.U_3d = self._get_umap(ndim=3)
 
         # Merge raw archetypes to get major archetypes
         if self.verbose:
-            logging.info('{0} variance explained by raw archetypes.\n'
-                         'Merging those within {1} NNs to get major archetypes'.format(np.round(ev, 4), r))
+            LOGGER.info('{0} variance explained by raw archetypes.\nMerging those within {1} NNs to get major archetypes'.format(np.round(ev, 4), r))
         arche_dict, major_idx = self._merge_archetypes(r)
-        self.archetype = archetype
-        self.major_archetype = archetype[major_idx]
+        self.major_archetype = self.archetype[major_idx]
         self.major_idx = major_idx
         self.arche_dict = arche_dict
         return archetype, arche_dict, major_idx
@@ -120,7 +116,7 @@ class ArchetypalAnalysis:
         n_archetypes = self.archetype.shape[0]
         X_concat = np.vstack([self.count, self.archetype])
         nbrs = NearestNeighbors(n_neighbors=r).fit(X_concat)
-        nn_graph = nbrs.kneighbors_graph(X_concat)[1][self.n_spots:, 1:] # retrieve NN-graph of only archetype spots
+        nn_graph = nbrs.kneighbors(X_concat)[1][self.n_spots:, 1:] # retrieve NN-graph of only archetype spots
 
         idxs_to_remove = set()
         arche_dict = {}
@@ -138,7 +134,7 @@ class ArchetypalAnalysis:
         major_idx = np.arange(n_archetypes)[~np.isin(np.arange(n_archetypes), list(idxs_to_remove))]
         return arche_dict, major_idx
 
-    def find_archetypal_spots(self, n_neighbors=40, major=False):
+    def find_archetypal_spots(self, n_neighbors=40, major=True):
         """
         Assign N-nearest-neighbor spots to each archetype as `archetypal spots` (archetype community)
 
@@ -157,11 +153,13 @@ class ArchetypalAnalysis:
         """
         assert self.archetype is not None, "Please compute archetypes first!"
         if self.verbose:
-            logging.info('Finding {} nearest neighbors for each archetype...'.format(n_neighbors))
+            LOGGER.info('Finding {} nearest neighbors for each archetype...'.format(n_neighbors))
 
-        nbr_dict = {}
-        archetype = self.major_archetype if major else self.archetype
-        for i, v in enumerate(archetype):
+        nbr_dict = {}        
+        indices = self.major_idx if major else np.arange(self.archetype.shape[0])
+        
+        for i in range(indices):
+            v = self.archetype[i]
             X_concat = np.vstack([self.count, v])
             nbrs = NearestNeighbors(n_neighbors=n_neighbors+1).fit(X_concat)
             nn_graph = nbrs.kneighbors(X_concat)[1][-1, 1:]  # find nbr indices of the attached archetype `v`
@@ -186,7 +184,7 @@ class ArchetypalAnalysis:
         """
         assert self.arche_df is not None, "Please compute archetypes & assign nearest-neighbors first!"
         if self.verbose:
-            logging.info('Finding {} top marker genes for each archetype...'.format(n_markers))
+            LOGGER.info('Finding {} top marker genes for each archetype...'.format(n_markers))
 
         adata = self.adata.copy()
         markers = []
@@ -284,7 +282,7 @@ class ArchetypalAnalysis:
 
         # Sort unmapped archetypes in descending orders with avg. distance to its 2 closest anchor spot centroid
         if n > len(unmapped_archetypes):
-            logging.warning('Insufficient candidates to find {0} distant archetypes\nSet n={1}'.format(
+            LOGGER.warning('Insufficient candidates to find {0} distant archetypes\nSet n={1}'.format(
                 n, len(unmapped_archetypes)
             ))
         anchor_centroids = self.count[anchor_df[anchor_df.columns]].mean(0)

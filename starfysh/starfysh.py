@@ -24,9 +24,7 @@ torch.manual_seed(0)
 np.random.seed(0)
 
 
-import torch.nn as nn
 from torch.distributions import Normal, LogNormal,Dirichlet, kl_divergence as kl
-import torch
 
 class AVAE(nn.Module):
     """ model design ***
@@ -64,9 +62,7 @@ class AVAE(nn.Module):
         self.c_enc_m = nn.Sequential(
                                 nn.Linear(self.c_hidden, self.c_kn, bias=True),
                                 nn.BatchNorm1d(self.c_kn, momentum=0.01,eps=0.001),
-                                #nn.ReLU(),
-                                nn.Softmax()
-                                #nn.Softplus()
+                                nn.Softmax(dim=-1)
         )
         #self.c_enc_logv = nn.Linear(self.c_hidden, self.c_hidden)
         
@@ -95,7 +91,6 @@ class AVAE(nn.Module):
         
         # gene dispersion
         self.px_r = torch.nn.Parameter(torch.randn(self.c_in),requires_grad=True)
-        #self.alpha= torch.nn.Parameter(torch.rand(1)*1e3,requires_grad=True)
 
         # neural network g to get the x_m and x_v, p(x|z), g(z,\phi_3)=[x_m,x_v]
         self.px_hidden_decoder = nn.Sequential(
@@ -258,10 +253,7 @@ class AVAE(nn.Module):
         
         
         if (x_peri[:,0]==1).sum()>0:
-            
-            #kl_divergence_c = kl(Dirichlet(qc_m[x_peri[:,0]==1] *self.alpha2 * (ql[x_peri[:,0]==1]+1) ), *0.Dirichlet(pc_p[x_peri[:,0]==1])).mean()
             kl_divergence_c = kl(Dirichlet(qc_m[x_peri[:,0]==1]*self.alpha), Dirichlet(pc_p[x_peri[:,0]==1])).mean()
-            #kl_divergence_c = kl(Dirichlet(qc_m*self.alpha), Dirichlet(pc_p)).mean()
             if (x_peri[:,0]==0).sum()>0:
                 #kl_divergence_c = kl_divergence_c+(self.win_loglib.max()-self.win_loglib.min())*1e-2*kl(Dirichlet(qc_m[x_peri[:,0]==0]*self.alpha), Dirichlet(pc_p[x_peri[:,0]==0])).mean()
                 # para-dependent 
@@ -429,7 +421,7 @@ class NegBinom(Distribution):
             dispersion of NegBinom. distribution
             shape - [# genes,]
         """
-        super(NegBinom, self).__init__()
+        super(NegBinom, self).__init__(validate_args=False)
         assert (mu > 0).sum() and (theta > 0).sum(), \
             "Negative mean / dispersion of Negative detected"
 
