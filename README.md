@@ -1,4 +1,7 @@
-# spatial transcriptome analysis
+<img src=https://github.com/azizilab/Starfysh/blob/main/logo.png width="500" />
+
+# Spatial Transcriptomic Analysis using Reference-Free auxiliarY deep generative modeling and Shared Histology
+
 
 ## Problem setting: 
 
