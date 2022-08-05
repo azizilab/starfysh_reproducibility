@@ -48,7 +48,7 @@ class VisiumArguments:
         }
         
         # Update parameters for library smoothing & anchor spot identification
-        for k, v in kwargs:
+        for k, v in kwargs.items():
             if k in self.params.keys():
                 self.params[k] = v
         
@@ -59,7 +59,8 @@ class VisiumArguments:
         
         # Get smoothed library size
         LOGGER.info('Smoothing library size by taking averaging with neighbor spots...')
-        self.log_lib = np.log1p(self.adata.X.sum(1))
+        log_lib = np.log1p(self.adata.X.sum(1))
+        self.log_lib = np.squeeze(np.asarray(log_lib)) if log_lib.ndim > 1 else log_lib
         self.win_loglib = get_windowed_library(self.adata, 
                                                map_info,
                                                self.log_lib,
@@ -569,3 +570,26 @@ def get_windowed_library(adata_sample, map_info, library, window_size):
         library_n.append(library[dist_arr < window_size].mean())
     library_n = np.array(library_n)
     return library_n
+
+
+def append_sigs(gene_sig, factor, sigs, n_genes=30):
+    """
+    Append list of genes to a given cell type as additional signatures or 
+    add novel cell type / states & their signatures
+    """
+    assert len(sigs) > 0, "Signature list must have positive length"
+    gene_sig_new = gene_sig.copy()    
+    if not isinstance(sigs, list):
+        sigs = sigs.to_list()
+    if n_genes < len(sigs):
+        sigs = sigs[:n_genes]
+                  
+    if factor in gene_sig_new.columns: # Append signatures to known cell type
+        update_1 = [np.nan] * (~pd.isna(gene_sig_new[factor])).sum()
+        update_2 = [np.nan] * (gene_sig_new.shape[0] - len(update_1) - len(sigs))
+        gene_sig_new[factor].update(update_1 + sigs + update_2)          
+    else: # Adding signatures to novel cell type
+        gene_sig_new[factor] = sigs
+        
+    return gene_sig_new
+    

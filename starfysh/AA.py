@@ -20,7 +20,7 @@ from starfysh import LOGGER
 
 
 class ArchetypalAnalysis:
-    # Todo: implement non-linear archetype analysis with VAE, compare explainability with linear implementation
+    # Todo: implement non-linear archetype analysis witFh VAE, compare explainability with linear implementation
     def __init__(self,
                  adata_orig,
                  verbose=True,
@@ -29,15 +29,12 @@ class ArchetypalAnalysis:
                  savefig=False,
                  ):
 
-        # Normalize count matrix
-        adata = adata_orig.copy()
-        sc.pp.normalize_total(adata)
-        sc.pp.log1p(adata)
-
-        self.count = adata.X.A if isinstance(adata.X, sparse.csr_matrix) else adata.X
+        self.adata = adata_orig.copy()
+        self.adata.raw = None
+        
+        self.count = self.adata.X.A if isinstance(self.adata.X, sparse.csr_matrix) else self.adata.X
         self.n_spots, self.n_genes = self.count.shape
         self.verbose = verbose
-        self.adata = adata
         self.outdir = outdir
         self.filename = filename
         self.savefig = savefig
@@ -93,7 +90,7 @@ class ArchetypalAnalysis:
         X = self.count.T
         archetype, _, _, _, ev = PCHA(X, noc=k, delta=0.1)
         self.archetype = np.array(archetype).T
-            LOGGER.info('Calculating UMAPs for counts + Archetypes...')
+        LOGGER.info('Calculating UMAPs for counts + Archetypes...')
         self.U = self._get_umap(ndim=2)
         self.U_3d = self._get_umap(ndim=3)
 
@@ -158,7 +155,7 @@ class ArchetypalAnalysis:
         nbr_dict = {}        
         indices = self.major_idx if major else np.arange(self.archetype.shape[0])
         
-        for i in range(indices):
+        for i in indices:
             v = self.archetype[i]
             X_concat = np.vstack([self.count, v])
             nbrs = NearestNeighbors(n_neighbors=n_neighbors+1).fit(X_concat)
@@ -331,7 +328,8 @@ class ArchetypalAnalysis:
             # Color background spots & archetypal spots
             ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], s=0.5, alpha=0.2, c='gray')
             for i, label in enumerate(self.arche_df.columns):
-                if i in arche_indices:
+                lbl = int(label.split('_')[-1])
+                if lbl in arche_indices:
                     idxs = self.arche_df[label]
                     ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], marker='o', s=3, color=colors[i], label=label)
 
@@ -348,7 +346,8 @@ class ArchetypalAnalysis:
             # Color background & archetypal spots
             ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], s=0.5, c='gray')
             for i, label in enumerate(self.arche_df.columns):
-                if i in arche_indices:
+                lbl = int(label.split('_')[-1])
+                if lbl in arche_indices:
                     idxs = self.arche_df[label]
                     ax.scatter(U[idxs, 0], U[idxs, 1], marker='o', s=3, color=colors[i], label=label)
 
@@ -399,7 +398,7 @@ class ArchetypalAnalysis:
                 ax2.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='o', s=3, alpha=0.6, label=label)
 
             # Highlight selected archetypes
-            for label in self.arche_df.columns:
+            for label in arche_lbls:
                 idx = int(label.split('_')[-1])
                 z = U[self.n_spots + idx, :]
                 ax2.text(z[0], z[1], z[2], str(idx))
