@@ -32,6 +32,20 @@ from .dataloader import VisiumDataset
 class VisiumArguments:
     """
     Loading Visium AnnData, perform preprocessing, library-size smoothing & Anchor spot detection
+    
+    Parameters
+    ----------
+    adata : AnnData
+        annotated visium count matrix
+    
+    adata_norm : AnnData
+        annotated visium count matrix after normalization & log-transform
+        
+    gene_sig : pd.DataFrame
+        list of signature genes for each cell type. (dim: [S, Cell_type])
+        
+    map_info : pd.DataFrame
+        Spatial information of histology image paired with visium
     """
     
     def __init__(self, adata, adata_norm, gene_sig, map_info, **kwargs):
@@ -41,7 +55,7 @@ class VisiumArguments:
         # self.gene_sig = filter_gene_sig(self.gene_sig) # filter low-expr genes (for now mute it)
         
         self.params = {
-            'n_anchors': 40,            
+            'n_anchors': 60,            
             'vlow': 10,
             'vhigh': 95,
             'window_size': 30            
@@ -69,15 +83,15 @@ class VisiumArguments:
         
         # Retrieve & Z-norm signature gexp
         LOGGER.info('Retrieving & normalizing signature gene expressions...')
-        sig_mean = get_sig_mean(self.adata,
-                                gene_sig,
-                                self.log_lib)
-        self.sig_mean = znorm_sigs(sig_mean)
+        self.sig_mean = get_sig_mean(self.adata,
+                                     gene_sig,
+                                     self.log_lib)
+        self.sig_mean_znorm = znorm_sigs(self.sig_mean)
         
         # Get anchor spots
         LOGGER.info('Identifying anchor spots (highly expression of specific cell-type signatures)...') 
         anchor_info = get_anchor_spots(self.adata,
-                                       self.sig_mean,
+                                       self.sig_mean_znorm,
                                        v_low=self.params['vlow'],
                                        v_high=self.params['vhigh'],
                                        n_anchor=self.params['n_anchors']
@@ -125,12 +139,29 @@ def run_starfysh(visium_args,
                  device=torch.device('cpu'),
                  verbose=True
                  ):
-    # TODO: need to pass all parameters!!!!!
-
     """
-    Note: adding early-stopping mechanism evaluated by loss c * loss n:
+    Wrapper to run starfysh deconvolution.
+    
+        Note: adding early-stopping mechanism evaluated by loss c
         - early-stopping with patience=10
         - choose best among 3 rerun
+        
+    Parameters
+    ----------
+    visium_args : VisiumArguments
+        Preprocessed metadata calculated from input visium matrix:
+        e.g. mean signature expression, library size, anchor spots, etc.
+        
+    n_repeats : int
+        Number of restart to run Starfysh
+        
+    Returns
+    -------
+    best_model : starfysh.AVAE
+        Trained Starfysh model with deconvolution results
+        
+    loss : np.ndarray
+        Training losses
     """
 
     np.random.seed(0)
@@ -140,7 +171,7 @@ def run_starfysh(visium_args,
     adata = visium_args.adata
     alpha_min = visium_args.alpha_min
     win_loglib = visium_args.win_loglib
-    gene_sig, sig_mean = visium_args.gene_sig, visium_args.sig_mean
+    gene_sig, sig_mean_znorm = visium_args.gene_sig, visium_args.sig_mean_znorm
     pure_dict, pure_idx = visium_args.pure_dict, visium_args.pure_idx
     
 
@@ -150,7 +181,7 @@ def run_starfysh(visium_args,
 
     trainset = VisiumDataset(
         adata=adata,
-        gene_sig_exp_m=sig_mean,
+        gene_sig_exp_m=sig_mean_znorm,
         adata_pure=pure_idx,
         library_n=win_loglib
     )
@@ -260,6 +291,7 @@ def get_alpha_min(sig_mean, pure_dict):
 
 def znorm_sigs(sig_mean, eps=1e-12):
     """Z-normalize average expressions for each gene"""
+    sig_mean += eps
     sig_mean_zscore = sig_mean.apply(zscore, axis=0)
     sig_mean_zscore -= sig_mean_zscore.min(0)
     sig_mean_zscore = sig_mean_zscore.fillna(0)
@@ -584,12 +616,19 @@ def append_sigs(gene_sig, factor, sigs, n_genes=30):
     if n_genes < len(sigs):
         sigs = sigs[:n_genes]
                   
+    """
     if factor in gene_sig_new.columns: # Append signatures to known cell type
         update_1 = [np.nan] * (~pd.isna(gene_sig_new[factor])).sum()
         update_2 = [np.nan] * (gene_sig_new.shape[0] - len(update_1) - len(sigs))
         gene_sig_new[factor].update(update_1 + sigs + update_2)          
     else: # Adding signatures to novel cell type
         gene_sig_new[factor] = sigs
+    """
+    temp = set([i for i in gene_sig[factor] if str(i) != 'nan']+[i for i in sigs if str(i) != 'nan'])
+    if len(temp)>gene_sig_new.shape[0]:
+        gene_sig_new = gene_sig_new.append(pd.DataFrame([[np.nan]*5]*(len(temp)-gene_sig_new.shape[0]), columns=gene_sig_new.columns), ignore_index=True)
+    else:
+        temp = list(temp)+[np.nan]*(gene_sig_new.shape[0]-len(temp))
         
     return gene_sig_new
     

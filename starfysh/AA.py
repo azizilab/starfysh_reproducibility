@@ -18,11 +18,15 @@ from sklearn.neighbors import NearestNeighbors
 
 from starfysh import LOGGER
 
+# TODO: add automatic pc_ratio adjustment for intrinsic estimator if NaN (`compute_archetypes`)
+
 
 class ArchetypalAnalysis:
-    # Todo: implement non-linear archetype analysis witFh VAE, compare explainability with linear implementation
+    # Todo: implement non-linear archetype analysis with VAE, compare explainability with linear implementation
     def __init__(self,
                  adata_orig,
+                 u=None,
+                 u_3d=None,
                  verbose=True,
                  outdir=None,
                  filename=None,
@@ -30,7 +34,6 @@ class ArchetypalAnalysis:
                  ):
 
         self.adata = adata_orig.copy()
-        self.adata.raw = None
         
         self.count = self.adata.X.A if isinstance(self.adata.X, sparse.csr_matrix) else self.adata.X
         self.n_spots, self.n_genes = self.count.shape
@@ -44,8 +47,9 @@ class ArchetypalAnalysis:
         self.major_idx = None
         self.arche_dict = None
         self.arche_df = None
-        self.U = None
-        self.U_3d = None
+
+        self.U = u
+        self.U_3d = u_3d
 
     def compute_archetypes(self, pc_ratio=.05, r=20, display=False):
         """
@@ -76,7 +80,7 @@ class ArchetypalAnalysis:
             Index of major archetypes among `k` raw candidates after merging
         """
         if self.verbose:
-            LOGGER.info('Computing intrnsic dimension to estimate k...')
+            LOGGER.info('Computing intrinsic dimension to estimate k...')
 
         # Estimate ID
         id_model = skdim.id.FisherS(conditional_number=int(self.n_genes*pc_ratio),
@@ -90,9 +94,11 @@ class ArchetypalAnalysis:
         X = self.count.T
         archetype, _, _, _, ev = PCHA(X, noc=k, delta=0.1)
         self.archetype = np.array(archetype).T
-        LOGGER.info('Calculating UMAPs for counts + Archetypes...')
-        self.U = self._get_umap(ndim=2)
-        self.U_3d = self._get_umap(ndim=3)
+
+        if self.U is None:
+            self.U = self._get_umap(ndim=2)
+        if self.U_3d is None:
+            self.U_3d = self._get_umap(ndim=3)
 
         # Merge raw archetypes to get major archetypes
         if self.verbose:
@@ -193,7 +199,7 @@ class ArchetypalAnalysis:
             adata.obs[col] = adata.obs[col].astype('category')
 
             # Identify marker genes
-            sc.tl.rank_genes_groups(adata, col, method='wilcoxon')
+            sc.tl.rank_genes_groups(adata, col, use_raw=False, method='wilcoxon')
             markers.append(adata.uns['rank_genes_groups']['names'][col][:n_markers])
 
             if display:
@@ -299,11 +305,11 @@ class ArchetypalAnalysis:
     # Plotting functions
     # -------------------
 
-    def _get_umap(self, ndim=2, random_state=0):
+    def _get_umap(self, ndim=2, random_state=42):
         assert ndim == 2 or ndim == 3, "Invalid dimension for UMAP: {}".format(ndim)
-        X = np.vstack([self.count, self.archetype])
+        LOGGER.info('Calculating UMAPs for counts + Archetypes...')
         reducer = umap.UMAP(n_components=ndim, random_state=random_state)
-        U = reducer.fit_transform(X)
+        U = reducer.fit_transform(self.count)
         return U
 
     def _save_fig(self, fig, lgds, default_name):
@@ -321,12 +327,13 @@ class ArchetypalAnalysis:
         arche_indices = self.major_idx if major else np.arange(n_archetypes)
         U = self.U_3d if do_3d else self.U
         colors = cm.tab20(np.linspace(0, 1, n_archetypes))
+        u_centroids = U[self.arche_df[self.arche_df.columns]].mean(0)
 
         if do_3d:
             fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300, subplot_kw=dict(projection='3d'))
 
             # Color background spots & archetypal spots
-            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], s=0.5, alpha=0.2, c='gray')
+            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], s=0.5, alpha=0.2, c='lightgray')
             for i, label in enumerate(self.arche_df.columns):
                 lbl = int(label.split('_')[-1])
                 if lbl in arche_indices:
@@ -334,29 +341,29 @@ class ArchetypalAnalysis:
                     ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], marker='o', s=3, color=colors[i], label=label)
 
             # Highlight archetype
-            idxs = self.n_spots + arche_indices
-            ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], s=5, c='r', marker='^')
-            for j, z in zip(arche_indices, U[idxs]):
+            ax.scatter(u_centroids[:, 0], u_centroids[:, 1], u_centroids[:, 2], s=5, c='r', marker='^')
+            for j, z in zip(arche_indices, u_centroids):
                 ax.text(z[0], z[1], z[2], str(j))
             lgd = ax.legend(loc='right', bbox_to_anchor=(0.5, 0, 1, 0.5), ncol=lgd_ncol)
+            ax.axis('off')
 
         else:
             fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300)
 
             # Color background & archetypal spots
-            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], s=0.5, c='gray')
+            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], alpha=1, s=0.5, color='lightgray')
             for i, label in enumerate(self.arche_df.columns):
                 lbl = int(label.split('_')[-1])
                 if lbl in arche_indices:
                     idxs = self.arche_df[label]
                     ax.scatter(U[idxs, 0], U[idxs, 1], marker='o', s=3, color=colors[i], label=label)
 
-            # Highlight archetype
-            idxs = self.n_spots + arche_indices
-            ax.scatter(U[idxs, 0], U[idxs, 1], s=5, c='r', marker='^')
-            for j, z in zip(arche_indices, U[idxs]):
+            ax.scatter(u_centroids[:, 0], u_centroids[:, 1], s=5, c='r', marker='^')
+            for j, z in zip(arche_indices, u_centroids):
                 ax.text(z[0], z[1], str(j))
-            lgd = ax.legend(loc='right', bbox_to_anchor=(1.5, 0.5), ncol=lgd_ncol)
+            lgd = ax.legend(loc='right', bbox_to_anchor=(2, 0.5), ncol=lgd_ncol)
+            ax.grid(False)
+            ax.axis('off')
 
         if self.savefig and self.outdir is not None:
             self._save_fig(fig, (lgd,), 'archetypes')
@@ -376,9 +383,11 @@ class ArchetypalAnalysis:
         U = self.U_3d if do_3d else self.U
         cell_types = anchor_df.columns if cell_types is None else np.intersect1d(cell_types, anchor_df.columns)
         arche_lbls = self.arche_df.columns if arche_lbls is None else np.intersect1d(arche_lbls, self.arche_df.columns)
+        u_centroids = U[self.arche_df[arche_lbls]].mean(0)        
 
-        anchor_colors = cm.Pastel1(np.linspace(0, 1, len(cell_types)))
-        arche_colors = cm.Pastel2(np.linspace(0, 1, len(arche_lbls)))
+
+        anchor_colors = cm.RdBu_r(np.linspace(0, 1, len(cell_types)))
+        arche_colors = cm.RdBu_r(np.linspace(0, 1, len(arche_lbls)))
 
         if do_3d:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), dpi=300, subplot_kw=dict(projection='3d'))
@@ -387,7 +396,7 @@ class ArchetypalAnalysis:
             ax1.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], c='gray', marker='.', s=1, alpha=0.2)
             for c, label in zip(anchor_colors, cell_types):
                 idxs = anchor_df[label]
-                ax1.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='^', s=5, alpha=0.6, label=label)
+                ax1.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='^', s=5, alpha=0.9, label=label)
             ax1.grid(False)
             lgd1 = ax1.legend(loc='lower center', bbox_to_anchor=(0.5, -1), ncol=lgd_ncol)
 
@@ -395,12 +404,11 @@ class ArchetypalAnalysis:
             ax2.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], c='gray', marker='.', s=1, alpha=0.2)
             for c, label in zip(arche_colors, arche_lbls):
                 idxs = self.arche_df[label]
-                ax2.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='o', s=3, alpha=0.6, label=label)
+                ax2.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='o', s=3, alpha=0.9, label=label)
 
             # Highlight selected archetypes
-            for label in arche_lbls:
+            for label, z in zip(arche_lbls, u_centroids):
                 idx = int(label.split('_')[-1])
-                z = U[self.n_spots + idx, :]
                 ax2.text(z[0], z[1], z[2], str(idx))
             lgd2 = ax2.legend(loc='lower center', bbox_to_anchor=(0.5, -1), ncol=lgd_ncol)
 
@@ -411,21 +419,20 @@ class ArchetypalAnalysis:
             ax1.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], c='gray', marker='.', s=1, alpha=0.2)
             for c, label in zip(anchor_colors, cell_types):
                 idxs = anchor_df[label]
-                ax1.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='^', s=5, alpha=0.6, label=label)
+                ax1.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='^', s=5, alpha=0.9, label=label)
             lgd1 = ax1.legend(loc='lower center', bbox_to_anchor=(0.5, -1.75), ncol=lgd_ncol)
 
             # Display archetypal spots
             ax2.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], c='gray', marker='.', s=1, alpha=0.2)
             for c, label in zip(arche_colors, arche_lbls):
                 idxs = self.arche_df[label]
-                ax2.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='o', s=3, alpha=0.6, label=label)
-            lgd2 = ax2.legend(loc='lower center', bbox_to_anchor=(0.5, -1.85), ncol=lgd_ncol)
+                ax2.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='o', s=3, alpha=0.9, label=label)
 
-            # Display selected archetypes
-            for label in self.arche_df.columns:
+            # Highlight selected archetypes
+            for label, z in zip(arche_lbls, u_centroids):
                 idx = int(label.split('_')[-1])
-                z = U[self.n_spots + idx, :]
                 ax2.text(z[0], z[1], str(idx))
+            lgd2 = ax2.legend(loc='lower center', bbox_to_anchor=(0.5, -1.85), ncol=lgd_ncol)
 
         if self.savefig and self.outdir is not None:
             self._save_fig(fig, (lgd1, lgd2), 'anchor_archetypal_spots')
