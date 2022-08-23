@@ -629,6 +629,7 @@ def append_sigs(gene_sig, factor, sigs, n_genes=30):
         gene_sig_new = gene_sig_new.append(pd.DataFrame([[np.nan]*5]*(len(temp)-gene_sig_new.shape[0]), columns=gene_sig_new.columns), ignore_index=True)
     else:
         temp = list(temp)+[np.nan]*(gene_sig_new.shape[0]-len(temp))
+        gene_sig_new[factor]=list(temp)
         
     return gene_sig_new
     

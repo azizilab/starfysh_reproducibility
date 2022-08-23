@@ -51,7 +51,7 @@ class ArchetypalAnalysis:
         self.U = u
         self.U_3d = u_3d
 
-    def compute_archetypes(self, pc_ratio=.05, r=20, display=False):
+    def compute_archetypes(self, pc_ratio=.05, cn=50, r=20, display=False):
         """
         Estimate the upper bound of archetype count (k) by calculating intrinsic dimension
         Compute hierarchical archetypes (major + raw) with given granularity
@@ -79,11 +79,16 @@ class ArchetypalAnalysis:
         major_idx : int
             Index of major archetypes among `k` raw candidates after merging
         """
+        
+        # TMP: across-sample comparison: fix # principle components for all samples
+        
         if self.verbose:
             LOGGER.info('Computing intrinsic dimension to estimate k...')
 
         # Estimate ID
-        id_model = skdim.id.FisherS(conditional_number=int(self.n_genes*pc_ratio),
+        conditional_num = cn if cn is not None else self.n_genes*pc_ratio
+        id_model = skdim.id.FisherS(#conditional_number=int(self.n_genes*pc_ratio),
+                                    conditional_number=conditional_num,
                                     produce_plots=display,
                                     verbose=self.verbose)
         k = int(id_model.fit(self.count).dimension_)
