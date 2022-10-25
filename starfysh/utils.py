@@ -58,7 +58,8 @@ class VisiumArguments:
             'n_anchors': 60,            
             'vlow': 10,
             'vhigh': 95,
-            'window_size': 30            
+            'window_size': 30,       
+            'z_axis': 0
         }
         
         # Update parameters for library smoothing & anchor spot identification
@@ -86,7 +87,7 @@ class VisiumArguments:
         self.sig_mean = get_sig_mean(self.adata,
                                      gene_sig,
                                      self.log_lib)
-        self.sig_mean_znorm = znorm_sigs(self.sig_mean)
+        self.sig_mean_znorm = znorm_sigs(self.sig_mean, z_axis=self.params['z_axis'])
         
         # Get anchor spots
         LOGGER.info('Identifying anchor spots (highly expression of specific cell-type signatures)...') 
@@ -98,7 +99,7 @@ class VisiumArguments:
                                       )
         self.pure_spots, self.pure_dict, self.pure_idx = anchor_info
         # TODO: what does the following ling mean? (I assume all selected genes are HVGs)
-        self.adata.var['highly_variable'] = True
+        #self.adata.var['highly_variable'] = True
         
         # Calculate alpha mean
         self.alpha_min = get_alpha_min(self.sig_mean, self.pure_dict)
@@ -289,11 +290,12 @@ def get_alpha_min(sig_mean, pure_dict):
     return alpha_min
 
 
-def znorm_sigs(sig_mean, eps=1e-12):
+def znorm_sigs(sig_mean, z_axis, eps=1e-12):
     """Z-normalize average expressions for each gene"""
     sig_mean += eps
-    sig_mean_zscore = sig_mean.apply(zscore, axis=0)
+    sig_mean_zscore = sig_mean.apply(zscore, axis=z_axis)
     sig_mean_zscore -= sig_mean_zscore.min(0)
+    # sig_mean_zscore[sig_mean_zscore<0] = 0
     sig_mean_zscore = sig_mean_zscore.fillna(0)
     return sig_mean_zscore
     
@@ -302,7 +304,7 @@ def preprocess(adata_raw,
                lognorm=True, 
                min_perc=None,
                max_perc=None, 
-               n_top_genes=6000, 
+               n_top_genes=2000, 
                mt_thld=100,
                verbose=True
               ):
@@ -351,11 +353,12 @@ def preprocess(adata_raw,
     mask_gene = np.logical_and(~adata.var['mt'], ~adata.var['rb'])
 
     adata = adata[mask_cell, mask_gene]
+    sc.pp.filter_genes(adata, min_cells=1)
 
     if lognorm:
         if verbose:
             LOGGER.info('Preprocessing2: Normalize')
-        sc.pp.normalize_total(adata, inplace=True)
+        sc.pp.normalize_total(adata, target_sum=1e6, inplace=True)
 
         # Preprocessing3: Logarithm
         if verbose:
@@ -366,13 +369,12 @@ def preprocess(adata_raw,
             LOGGER.info('Skip Normalize and Logarithm')
 
     # Preprocessing4: Find the variable genes
-    adata2 = adata.copy()
     if verbose:
         LOGGER.info('Preprocessing4: Find the variable genes')
     sc.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=n_top_genes, inplace=True)
-    adata.var['highly_variable']['PDCD1']=True # TODO: We need to avoid the hard-coded HVG threshold in public version
-    adata2.var = adata.var
-    return adata2
+    # adata.var['highly_variable']['PDCD1']=True # TODO: We need to avoid the hard-coded HVG threshold in public version
+    
+    return adata[:, adata.var.highly_variable]
 
 
 def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
@@ -431,8 +433,8 @@ def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
     tissue_position_list = tissue_position_list.loc[adata_index, :]
     map_info = tissue_position_list.iloc[:, 1:3]
     map_info.columns = ['array_row', 'array_col']
-    map_info.loc[:, 'imagerow'] = tissue_position_list.iloc[:, 3] * tissue_hires_scalef
-    map_info.loc[:, 'imagecol'] = tissue_position_list.iloc[:, 4] * tissue_hires_scalef
+    map_info.loc[:, 'imagerow'] = tissue_position_list.iloc[:, -2] * tissue_hires_scalef
+    map_info.loc[:, 'imagecol'] = tissue_position_list.iloc[:, -1] * tissue_hires_scalef
     map_info.loc[:, 'sample'] = sample_id
 
     # return adata_image, adata_image_h, adata_image_e, map_info
@@ -471,11 +473,15 @@ def load_adata(data_folder, sample_id, n_genes):
         sample_id: the folder name for the data
         n_genes: the number of the gene for training
     """
-    if sample_id.startswith('MBC'):
+    has_feature_h5 = os.path.isfile(
+        os.path.join(data_folder, sample_id, 'filtered_feature_bc_matrix.h5')
+    ) # whether dataset stored in h5 with spatial info.
+
+    if has_feature_h5:
         adata_sample = sc.read_visium(path=os.path.join(data_folder, sample_id), library_id=sample_id)
         adata_sample.var_names_make_unique()
         adata_sample.obs['sample'] = sample_id
-    elif sample_id.startswith('simu'):
+    elif sample_id.startswith('simu'): # simulations
         adata_sample = sc.read_csv(os.path.join(data_folder, sample_id, 'counts.st_synth.csv'))
 
     else:
@@ -483,8 +489,8 @@ def load_adata(data_folder, sample_id, n_genes):
         adata_sample.var_names_make_unique()
         adata_sample.obs['sample'] = sample_id
     adata_sample_pre = preprocess(adata_sample, n_top_genes=n_genes)
-    adata_sample = adata_sample[:, adata_sample_pre.var_names]
-    adata_sample.var = adata_sample_pre.var
+    adata_sample = adata_sample[:, list(adata_sample_pre.var_names)]
+    adata_sample.var['highly_variable'] = adata_sample_pre.var['highly_variable']
     adata_sample.obs = adata_sample_pre.obs
 
     if '_index' in adata_sample.var.columns:

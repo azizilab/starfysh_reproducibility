@@ -15,10 +15,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
-
 from starfysh import LOGGER
-
-# TODO: add automatic pc_ratio adjustment for intrinsic estimator if NaN (`compute_archetypes`)
 
 
 class ArchetypalAnalysis:
@@ -51,19 +48,28 @@ class ArchetypalAnalysis:
         self.U = u
         self.U_3d = u_3d
 
-    def compute_archetypes(self, pc_ratio=.05, cn=50, r=20, display=False):
+    def compute_archetypes(self, cn=10, n_iters=20, converge=1e-3, r=20, display=False):
         """
         Estimate the upper bound of archetype count (k) by calculating intrinsic dimension
         Compute hierarchical archetypes (major + raw) with given granularity
 
         Parameters
         ----------
-        pc_ratio ：float (default=10)
-            Ratio of gene dimension to represent `conditional_number` for ID estimation (Fisher Separability test)
-            Fisher Separability test select the top PCs with eigenvalues <= max(Eig) / conditional_number
+        cn : int
+            Conditional Number to choose PCs for intrinsic estimator as
+            lower bound # archetype estimation. Please refer to:
+            https://scikit-dimension.readthedocs.io/en/latest/skdim.id.FisherS.html#skdim.id.FisherS
+
+        n_iters : int
+            Max. # iterations of AA to find the best k estimation
+
+        converge : int
+            Convergence criteria for AA iteration with diff(explained variance)
 
 `       r : int
             Resolution parameter to control granularity of major archetypes
+            If two archetypes reside within r nearest neighbors, we shrink
+            the latter one.
 
         display : bool
             Whether to display Intrinsic Dimension (ID) estimation plots
@@ -74,10 +80,13 @@ class ArchetypalAnalysis:
             Raw archetypes as linear combination of subset of spot counts
 
         arche_dict : dict
-            Hierarchical strucuture major_archetype -> its fine-grained neighbor archetypes
+            Hierarchical structure of major_archetype -> its fine-grained neighbor archetypes
 
         major_idx : int
-            Index of major archetypes among `k` raw candidates after merging
+            Index of major archetypes among `k` raw candidates after merging\
+
+        evs : list
+            LIst of explained variance with different Ks
         """
         
         # TMP: across-sample comparison: fix # principle components for all samples
@@ -86,19 +95,27 @@ class ArchetypalAnalysis:
             LOGGER.info('Computing intrinsic dimension to estimate k...')
 
         # Estimate ID
-        conditional_num = cn if cn is not None else self.n_genes*pc_ratio
+        conditional_num = cn
         id_model = skdim.id.FisherS(#conditional_number=int(self.n_genes*pc_ratio),
                                     conditional_number=conditional_num,
                                     produce_plots=display,
                                     verbose=self.verbose)
-        k = int(id_model.fit(self.count).dimension_)
+
+        kmin = max(1, int(id_model.fit(self.count).dimension_))
 
         # Compute raw archetypes
         if self.verbose:
-            LOGGER.info('Computing {0} archetypes...'.format(k))
+            LOGGER.info('Estimating lower bound of # archetype as {0}...'.format(kmin))
         X = self.count.T
-        archetype, _, _, _, ev = PCHA(X, noc=k, delta=0.1)
-        self.archetype = np.array(archetype).T
+        archetypes = []
+        evs = []
+        for i, k in enumerate(range(kmin, kmin+n_iters)):
+            archetype, _, _, _, ev = PCHA(X, noc=k, delta=0.1)
+            evs.append(ev)
+            archetypes.append(np.array(archetype).T)
+            if i > 0 and ev - evs[i-1] < converge:
+                break
+        self.archetype = archetypes[-1]
 
         if self.U is None:
             self.U = self._get_umap(ndim=2)
@@ -110,10 +127,12 @@ class ArchetypalAnalysis:
             LOGGER.info('{0} variance explained by raw archetypes.\nMerging those within {1} NNs to get major archetypes'.format(np.round(ev, 4), r))
         arche_dict, major_idx = self._merge_archetypes(r)
         self.major_archetype = self.archetype[major_idx]
-        self.major_idx = major_idx
+        self.major_idx = np.array(major_idx)
         self.arche_dict = arche_dict
-        return archetype, arche_dict, major_idx
 
+        # temp: return all archetypes for Silhouette score calculation
+        return archetypes, arche_dict, major_idx, evs
+    
     def _merge_archetypes(self, r):
         """
         Merge raw archetypes into major ones by removing candidate with `r`-step distance
@@ -139,10 +158,10 @@ class ArchetypalAnalysis:
                     arche_dict[i] = np.insert(nbrs, 0, i)
                     idxs_to_remove.update(nbrs)
 
-        major_idx = np.arange(n_archetypes)[~np.isin(np.arange(n_archetypes), list(idxs_to_remove))]
+        major_idx = np.setdiff1d(np.arange(n_archetypes), list(idxs_to_remove))
         return arche_dict, major_idx
 
-    def find_archetypal_spots(self, n_neighbors=40, major=True):
+    def find_archetypal_spots(self, n_neighbors=20, major=True):
         """
         Assign N-nearest-neighbor spots to each archetype as `archetypal spots` (archetype community)
 
@@ -314,16 +333,18 @@ class ArchetypalAnalysis:
         assert ndim == 2 or ndim == 3, "Invalid dimension for UMAP: {}".format(ndim)
         LOGGER.info('Calculating UMAPs for counts + Archetypes...')
         reducer = umap.UMAP(n_components=ndim, random_state=random_state)
-        U = reducer.fit_transform(self.count)
+        U = reducer.fit_transform(np.vstack([self.count, self.archetype]))
         return U
 
     def _save_fig(self, fig, lgds, default_name):
         filename = self.filename if self.filename is not None else default_name
         if not os.path.exists(self.outdir):
             os.makedirs(self.outdir)
-        fig.savefig(os.path.join(self.outdir, filename+'.eps'), bbox_extra_artists=lgds, bbox_inches='tight', format='eps')
-
-    def plot_archetypes(self, major=True, do_3d=False, lgd_ncol=1, figsize=(6, 4)):
+        fig.savefig(os.path.join(self.outdir, filename+'.svg'), bbox_extra_artists=lgds, bbox_inches='tight', format='svg')
+        
+    def plot_archetypes(self, major=True, do_3d=False, lgd_ncol=1, figsize=(6, 4),
+                        disp_cluster=True, disp_arche=True
+                       ):
         """
         Display archetype & archetypal spot communities
         """
@@ -332,41 +353,68 @@ class ArchetypalAnalysis:
         arche_indices = self.major_idx if major else np.arange(n_archetypes)
         U = self.U_3d if do_3d else self.U
         colors = cm.tab20(np.linspace(0, 1, n_archetypes))
-        u_centroids = U[self.arche_df[self.arche_df.columns]].mean(0)
 
         if do_3d:
-            fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300, subplot_kw=dict(projection='3d'))
+            fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=200, subplot_kw=dict(projection='3d'))
 
             # Color background spots & archetypal spots
-            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], s=0.5, alpha=0.2, c='lightgray')
-            for i, label in enumerate(self.arche_df.columns):
-                lbl = int(label.split('_')[-1])
-                if lbl in arche_indices:
-                    idxs = self.arche_df[label]
-                    ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], marker='o', s=3, color=colors[i], label=label)
+            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], 
+                       s=1, alpha=0.7, linewidth=.3, edgecolors='black', c='lightgray')
+            if disp_cluster:
+                for i, label in enumerate(self.arche_df.columns):
+                    lbl = int(label.split('_')[-1])
+                    if lbl in arche_indices:
+                        idxs = self.arche_df[label]
+                        ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], marker='o', s=3, color=colors[i], label=label)
 
             # Highlight archetype
-            ax.scatter(u_centroids[:, 0], u_centroids[:, 1], u_centroids[:, 2], s=5, c='r', marker='^')
-            for j, z in zip(arche_indices, u_centroids):
-                ax.text(z[0], z[1], z[2], str(j))
+            if disp_arche:                                  
+                ax.scatter(U[self.n_spots+arche_indices, 0], U[self.n_spots+arche_indices, 1], U[self.n_spots+arche_indices, 2], s=10, c='blue', marker='^')
+                                  
+                for j, z in zip(arche_indices, U[self.n_spots+arche_indices]):
+                    ax.text(z[0], z[1], z[2], str(j), fontsize=10, c='blue')
             lgd = ax.legend(loc='right', bbox_to_anchor=(0.5, 0, 1, 0.5), ncol=lgd_ncol)
-            ax.axis('off')
-
+            
+            ax.grid(False)
+            ax.set_xlabel('UMAP1')
+            ax.set_ylabel('UMAP2')
+            ax.set_zlabel('UMAP3')
+            
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.set_zticklabels([])
+            
+            ax.xaxis.pane.set_edgecolor('black')
+            ax.yaxis.pane.set_edgecolor('black')
+            
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_zticks([])
+            
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+            
+            ax.view_init(20, 135)
         else:
             fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300)
 
             # Color background & archetypal spots
-            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], alpha=1, s=0.5, color='lightgray')
-            for i, label in enumerate(self.arche_df.columns):
-                lbl = int(label.split('_')[-1])
-                if lbl in arche_indices:
-                    idxs = self.arche_df[label]
-                    ax.scatter(U[idxs, 0], U[idxs, 1], marker='o', s=3, color=colors[i], label=label)
-
-            ax.scatter(u_centroids[:, 0], u_centroids[:, 1], s=5, c='r', marker='^')
-            for j, z in zip(arche_indices, u_centroids):
-                ax.text(z[0], z[1], str(j))
-            lgd = ax.legend(loc='right', bbox_to_anchor=(2, 0.5), ncol=lgd_ncol)
+            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], alpha=1, s=1, color='lightgray')
+            
+            if disp_cluster:
+                for i, label in enumerate(self.arche_df.columns):
+                    lbl = int(label.split('_')[-1])
+                    if lbl in arche_indices:
+                        idxs = self.arche_df[label]
+                        ax.scatter(U[idxs, 0], U[idxs, 1], marker='o', s=3, color=colors[i], label=label)
+            if disp_arche:
+                ax.scatter(U[self.n_spots+arche_indices, 0], U[self.n_spots+arche_indices, 1], 
+                           s=10, c='blue', marker='^')                
+                for j, z in zip(arche_indices, U[self.n_spots+arche_indices]):
+                    ax.text(z[0], z[1], str(j), fontsize=10, c='blue')
+                lgd = ax.legend(loc='right', bbox_to_anchor=(2, 0.5), ncol=lgd_ncol)
+                
             ax.grid(False)
             ax.axis('off')
 
@@ -402,7 +450,13 @@ class ArchetypalAnalysis:
             for c, label in zip(anchor_colors, cell_types):
                 idxs = anchor_df[label]
                 ax1.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='^', s=5, alpha=0.9, label=label)
+            
             ax1.grid(False)
+            ax1.set_xticklabels([])
+            ax1.set_yticklabels([])
+            ax1.set_zticklabels([])
+            ax1.view_init(30, 45)
+            
             lgd1 = ax1.legend(loc='lower center', bbox_to_anchor=(0.5, -1), ncol=lgd_ncol)
 
             # Display archetypal spots
@@ -415,6 +469,13 @@ class ArchetypalAnalysis:
             for label, z in zip(arche_lbls, u_centroids):
                 idx = int(label.split('_')[-1])
                 ax2.text(z[0], z[1], z[2], str(idx))
+            
+            ax2.grid(False)
+            ax2.set_xticklabels([])
+            ax2.set_yticklabels([])
+            ax2.set_zticklabels([])
+            ax2.view_init(30, 45)
+            
             lgd2 = ax2.legend(loc='lower center', bbox_to_anchor=(0.5, -1), ncol=lgd_ncol)
 
         else:
