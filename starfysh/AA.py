@@ -2,38 +2,39 @@ import os
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import scipy.sparse as sparse
 import umap
 import skdim
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from py_pcha import PCHA
-from matplotlib import rcParams
-from matplotlib.pyplot import cm, rc_context
-from mpl_toolkits.mplot3d import Axes3D
-from scipy.spatial.distance import cdist
-from sklearn.decomposition import PCA
+from matplotlib.pyplot import cm
+from scipy.spatial.distance import cdist, euclidean
 from sklearn.neighbors import NearestNeighbors
 from starfysh import LOGGER
 
 
 class ArchetypalAnalysis:
     # Todo: implement non-linear archetype analysis with VAE, compare explainability with linear implementation
-    def __init__(self,
-                 adata_orig,
-                 u=None,
-                 u_3d=None,
-                 verbose=True,
-                 outdir=None,
-                 filename=None,
-                 savefig=False,
-                 ):
+    def __init__(
+        self,
+        adata_orig,
+        u=None,
+        u_3d=None,
+        verbose=True,
+        outdir=None,
+        filename=None,
+        savefig=False,
+    ):
 
         self.adata = adata_orig.copy()
         
-        self.count = self.adata.X.A if isinstance(self.adata.X, sparse.csr_matrix) else self.adata.X
-        self.n_spots, self.n_genes = self.count.shape
+        # Perform dim-reduction with PCA, select the first 30 PCs
+        sc.pp.pca(self.adata)
+        self.count = self.adata.obsm['X_pca'][:, :30]
+        # self.count = self.adata.X.A if isinstance(self.adata.X, sparse.csr_matrix) else self.adata.X
+
+        self.n_spots = self.count.shape[0]
         self.verbose = verbose
         self.outdir = outdir
         self.filename = filename
@@ -48,7 +49,14 @@ class ArchetypalAnalysis:
         self.U = u
         self.U_3d = u_3d
 
-    def compute_archetypes(self, cn=10, n_iters=20, converge=1e-3, r=20, display=False):
+    def compute_archetypes(
+        self, 
+        cn=30, 
+        n_iters=20, 
+        converge=1e-3,
+        r=20,
+        display=False
+    ):
         """
         Estimate the upper bound of archetype count (k) by calculating intrinsic dimension
         Compute hierarchical archetypes (major + raw) with given granularity
@@ -96,8 +104,7 @@ class ArchetypalAnalysis:
 
         # Estimate ID
         conditional_num = cn
-        id_model = skdim.id.FisherS(#conditional_number=int(self.n_genes*pc_ratio),
-                                    conditional_number=conditional_num,
+        id_model = skdim.id.FisherS(conditional_number=conditional_num,
                                     produce_plots=display,
                                     verbose=self.verbose)
 
@@ -124,7 +131,7 @@ class ArchetypalAnalysis:
 
         # Merge raw archetypes to get major archetypes
         if self.verbose:
-            LOGGER.info('{0} variance explained by raw archetypes.\nMerging those within {1} NNs to get major archetypes'.format(np.round(ev, 4), r))
+            LOGGER.info('{0} variance explained by raw archetypes.\nMerging raw archetypes within {1} NNs to get major archetypes'.format(np.round(ev, 4), r))
         arche_dict, major_idx = self._merge_archetypes(r)
         self.major_archetype = self.archetype[major_idx]
         self.major_idx = np.array(major_idx)
@@ -189,7 +196,7 @@ class ArchetypalAnalysis:
             v = self.archetype[i]
             X_concat = np.vstack([self.count, v])
             nbrs = NearestNeighbors(n_neighbors=n_neighbors+1).fit(X_concat)
-            nn_graph = nbrs.kneighbors(X_concat)[1][-1, 1:]  # find nbr indices of the attached archetype `v`
+            nn_graph = nbrs.kneighbors(X_concat)[1][-1, 1:]  # find NNs of archetype `v`
             nbr_dict['arch_{}'.format(i)] = nn_graph
 
         self.arche_df = pd.DataFrame(nbr_dict)
@@ -197,7 +204,7 @@ class ArchetypalAnalysis:
 
     def find_markers(self, n_markers=30, display=False):
         """
-        Find marker genes for each archetype community with wilcoxon rank sum test (in-group vs. out-of-group)
+        Find marker genes for each archetype community via Wilcoxon rank sum test (in-group vs. out-of-group)
 
         Parameters
         ----------
@@ -265,7 +272,13 @@ class ArchetypalAnalysis:
                 map_ratio[i, j] = n_overlap / n_nbrs
 
         match_idx = map_ratio.argmax(1)
-        map_df = pd.DataFrame(map_ratio, index=anchor_df.columns, columns=self.arche_df.columns)
+        
+        map_df = pd.DataFrame(
+            map_ratio, 
+            index=anchor_df.columns, 
+            columns=self.arche_df.columns
+        )
+        
         map_dict = {
             anchor_df.columns[k]: self.arche_df.columns[v]
             for (k, v) in enumerate(match_idx)
@@ -340,11 +353,22 @@ class ArchetypalAnalysis:
         filename = self.filename if self.filename is not None else default_name
         if not os.path.exists(self.outdir):
             os.makedirs(self.outdir)
-        fig.savefig(os.path.join(self.outdir, filename+'.svg'), bbox_extra_artists=lgds, bbox_inches='tight', format='svg')
         
-    def plot_archetypes(self, major=True, do_3d=False, lgd_ncol=1, figsize=(6, 4),
-                        disp_cluster=True, disp_arche=True
-                       ):
+        fig.savefig(
+            os.path.join(self.outdir, filename+'.svg'),
+            bbox_extra_artists=lgds, bbox_inches='tight',
+            format='svg'
+        )
+        
+    def plot_archetypes(
+        self, 
+        major=True, 
+        do_3d=False, 
+        lgd_ncol=1, 
+        figsize=(6, 4),
+        disp_cluster=True, 
+        disp_arche=True
+    ):
         """
         Display archetype & archetypal spot communities
         """
@@ -358,21 +382,38 @@ class ArchetypalAnalysis:
             fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=200, subplot_kw=dict(projection='3d'))
 
             # Color background spots & archetypal spots
-            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], 
-                       s=1, alpha=0.7, linewidth=.3, edgecolors='black', c='lightgray')
+            ax.scatter(
+                U[:self.n_spots, 0],
+                U[:self.n_spots, 1],
+                U[:self.n_spots, 2], 
+                s=1, alpha=0.7, linewidth=.3,
+                edgecolors='black', c='lightgray'
+            )
+            
             if disp_cluster:
                 for i, label in enumerate(self.arche_df.columns):
                     lbl = int(label.split('_')[-1])
                     if lbl in arche_indices:
                         idxs = self.arche_df[label]
-                        ax.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], marker='o', s=3, color=colors[i], label=label)
+                        ax.scatter(
+                            U[idxs, 0],
+                            U[idxs, 1],
+                            U[idxs, 2],
+                            marker='o', s=3,
+                            color=colors[i], label=label
+                        )
 
             # Highlight archetype
             if disp_arche:                                  
-                ax.scatter(U[self.n_spots+arche_indices, 0], U[self.n_spots+arche_indices, 1], U[self.n_spots+arche_indices, 2], s=10, c='blue', marker='^')
-                                  
+                ax.scatter(
+                    U[self.n_spots+arche_indices, 0],
+                    U[self.n_spots+arche_indices, 1], 
+                    U[self.n_spots+arche_indices, 2],
+                    s=10, c='blue', marker='^'
+                )
                 for j, z in zip(arche_indices, U[self.n_spots+arche_indices]):
                     ax.text(z[0], z[1], z[2], str(j), fontsize=10, c='blue')
+                    
             lgd = ax.legend(loc='right', bbox_to_anchor=(0.5, 0, 1, 0.5), ncol=lgd_ncol)
             
             ax.grid(False)
@@ -396,21 +437,36 @@ class ArchetypalAnalysis:
             ax.zaxis.pane.fill = False
             
             ax.view_init(20, 135)
-        else:
+            
+        else: # 2D plot
+            
             fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300)
 
             # Color background & archetypal spots
-            ax.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], alpha=1, s=1, color='lightgray')
+            ax.scatter(
+                U[:self.n_spots, 0],
+                U[:self.n_spots, 1],
+                alpha=1, s=1, color='lightgray')
             
             if disp_cluster:
                 for i, label in enumerate(self.arche_df.columns):
                     lbl = int(label.split('_')[-1])
                     if lbl in arche_indices:
                         idxs = self.arche_df[label]
-                        ax.scatter(U[idxs, 0], U[idxs, 1], marker='o', s=3, color=colors[i], label=label)
+                        ax.scatter(
+                            U[idxs, 0],
+                            U[idxs, 1],
+                            marker='o', s=3,
+                            color=colors[i], label=label
+                        )
+                        
             if disp_arche:
-                ax.scatter(U[self.n_spots+arche_indices, 0], U[self.n_spots+arche_indices, 1], 
-                           s=10, c='blue', marker='^')                
+                ax.scatter(
+                    U[self.n_spots+arche_indices, 0],
+                    U[self.n_spots+arche_indices, 1], 
+                    s=10, c='blue', marker='^'
+                )
+                
                 for j, z in zip(arche_indices, U[self.n_spots+arche_indices]):
                     ax.text(z[0], z[1], str(j), fontsize=10, c='blue')
                 lgd = ax.legend(loc='right', bbox_to_anchor=(2, 0.5), ncol=lgd_ncol)
@@ -422,12 +478,15 @@ class ArchetypalAnalysis:
             self._save_fig(fig, (lgd,), 'archetypes')
         return fig, ax
 
-    def plot_anchor_archetype_clusters(self, anchor_df,
-                                       cell_types=None,
-                                       arche_lbls=None,
-                                       lgd_ncol=2,
-                                       do_3d=False
-                                       ):
+    def plot_anchor_archetype_clusters(
+        self,
+        anchor_df,
+        cell_types=None,
+        arche_lbls=None,
+        lgd_ncol=2,
+        do_3d=False
+                                       
+    ):
         """
         Joint display subset of anchor spots & archetypal spots (to visualize overlapping degree)
         """
@@ -438,7 +497,6 @@ class ArchetypalAnalysis:
         arche_lbls = self.arche_df.columns if arche_lbls is None else np.intersect1d(arche_lbls, self.arche_df.columns)
         u_centroids = U[self.arche_df[arche_lbls]].mean(0)        
 
-
         anchor_colors = cm.RdBu_r(np.linspace(0, 1, len(cell_types)))
         arche_colors = cm.RdBu_r(np.linspace(0, 1, len(arche_lbls)))
 
@@ -446,10 +504,21 @@ class ArchetypalAnalysis:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5), dpi=300, subplot_kw=dict(projection='3d'))
 
             # Display anchors
-            ax1.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], U[:self.n_spots, 2], c='gray', marker='.', s=1, alpha=0.2)
+            ax1.scatter(
+                U[:self.n_spots, 0], 
+                U[:self.n_spots, 1],
+                U[:self.n_spots, 2], 
+                c='gray', marker='.', s=1, alpha=0.2
+            )
             for c, label in zip(anchor_colors, cell_types):
                 idxs = anchor_df[label]
-                ax1.scatter(U[idxs, 0], U[idxs, 1], U[idxs, 2], color=c, marker='^', s=5, alpha=0.9, label=label)
+                ax1.scatter(
+                    U[idxs, 0], 
+                    U[idxs, 1], 
+                    U[idxs, 2], 
+                    color=c, marker='^', s=5,
+                    alpha=0.9, label=label
+                )
             
             ax1.grid(False)
             ax1.set_xticklabels([])
@@ -482,17 +551,33 @@ class ArchetypalAnalysis:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3), dpi=300)
 
             # Display anchors
-            ax1.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], c='gray', marker='.', s=1, alpha=0.2)
+            ax1.scatter(
+                U[:self.n_spots, 0],
+                U[:self.n_spots, 1], 
+                c='gray', marker='.', s=1, alpha=0.2
+            )
+            
             for c, label in zip(anchor_colors, cell_types):
                 idxs = anchor_df[label]
-                ax1.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='^', s=5, alpha=0.9, label=label)
+                ax1.scatter(
+                    U[idxs, 0],
+                    U[idxs, 1], 
+                    color=c, marker='^', s=5, 
+                    alpha=0.9, label=label
+                )
+                
             lgd1 = ax1.legend(loc='lower center', bbox_to_anchor=(0.5, -1.75), ncol=lgd_ncol)
 
             # Display archetypal spots
             ax2.scatter(U[:self.n_spots, 0], U[:self.n_spots, 1], c='gray', marker='.', s=1, alpha=0.2)
             for c, label in zip(arche_colors, arche_lbls):
                 idxs = self.arche_df[label]
-                ax2.scatter(U[idxs, 0], U[idxs, 1], color=c, marker='o', s=3, alpha=0.9, label=label)
+                ax2.scatter(
+                    U[idxs, 0],
+                    U[idxs, 1], 
+                    color=c, marker='o', s=3, 
+                    alpha=0.9, label=label
+                )
 
             # Highlight selected archetypes
             for label, z in zip(arche_lbls, u_centroids):
@@ -509,8 +594,15 @@ class ArchetypalAnalysis:
         Display anchor - archetype mapping (overlapping # spot ratio)
         """
         filename = 'cluster' if self.filename is None else self.filename
-        g = sns.clustermap(map_df, method='ward', vmin=0, vmax=1,
-                           figsize=figsize, xticklabels=True, yticklabels=True, annot_kws={'size': 15})
+        g = sns.clustermap(
+            map_df, 
+            method='ward', vmin=0, vmax=1,
+            figsize=figsize,
+            xticklabels=True, 
+            yticklabels=True,
+            annot_kws={'size': 15}
+        )
+        
         text = g.ax_heatmap.set_title('Proportion of Overlapped Spots (k={})'.format(map_df.shape[1]),
                                       fontsize=20, x=0.6, y=1.3)
         # g.ax_row_dendrogram.set_visible(False)
@@ -519,6 +611,9 @@ class ArchetypalAnalysis:
         if self.savefig and self.outdir is not None:
             if not os.path.exists(self.outdir):
                 os.makedirs(self.outdir)
-            g.figure.savefig(os.path.join(self.outdir, filename + '.eps'),
-                             bbox_extra_artists=(text,), bbox_inches='tight', format='eps')
+            g.figure.savefig(
+                os.path.join(self.outdir, filename + '.eps'),
+                bbox_extra_artists=(text,), bbox_inches='tight', format='eps'
+            )
+            
         return g

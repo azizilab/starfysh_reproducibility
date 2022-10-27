@@ -22,6 +22,7 @@ from skimage import io
 # Module import
 from starfysh import LOGGER
 from .starfysh import AVAE, train
+from .AA import ArchetypalAnalysis
 from .dataloader import VisiumDataset 
 
 
@@ -48,7 +49,15 @@ class VisiumArguments:
         Spatial information of histology image paired with visium
     """
     
-    def __init__(self, adata, adata_norm, gene_sig, map_info, **kwargs):
+    def __init__(
+        self, 
+        adata, 
+        adata_norm,
+        gene_sig, 
+        map_info, 
+        **kwargs
+    ):
+        
         self.adata = adata
         self.adata_norm = adata_norm
         self.gene_sig = gene_sig
@@ -132,14 +141,15 @@ def init_weights(module):
         module.weight.data.fill_(1.0)
 
 
-def run_starfysh(visium_args,
-                 n_repeats=3,
-                 lr=0.001,
-                 epochs=50,
-                 patience=10,
-                 device=torch.device('cpu'),
-                 verbose=True
-                 ):
+def run_starfysh(
+    visium_args,
+    n_repeats=3,
+    lr=0.001,
+    epochs=50,
+    patience=10,
+    device=torch.device('cpu'),
+    verbose=True
+):
     """
     Wrapper to run starfysh deconvolution.
     
@@ -300,21 +310,23 @@ def znorm_sigs(sig_mean, z_axis, eps=1e-12):
     return sig_mean_zscore
     
 
-def preprocess(adata_raw, 
-               lognorm=True, 
-               min_perc=None,
-               max_perc=None, 
-               n_top_genes=2000, 
-               mt_thld=100,
-               verbose=True
-              ):
+def preprocess(
+    adata_raw, 
+    lognorm=True, 
+    min_perc=None,
+    max_perc=None, 
+    n_top_genes=2000, 
+    mt_thld=100,
+    verbose=True
+):
     """
-    author: Yinuo Jin
     Preprocessing ST gexp matrix, remove Ribosomal & Mitochondrial genes
+    
     Parameters
     ----------
     adata_raw : annData
         Spot x Bene raw expression matrix [S x G]
+        
     min_perc : float
         lower-bound percentile of non-zero gexps for filtering spots
         
@@ -377,16 +389,43 @@ def preprocess(adata_raw,
     return adata[:, adata.var.highly_variable]
 
 
-def preprocess_img(data_path, sample_id, adata_index, hchannal=False):
+def preprocess_img(
+    data_path,
+    sample_id,
+    adata_index,
+    hchannal=False
+):
     """
-    Parameters:
-    1.data_path 
-    2.sample_id
+    Load and preprocess visium paired H&E image & spatial coords
     
-    get hematoxylin channel of the image, and get the loc of image
+    Parameters
+    ----------
+    data_path : str
+        Root directory of the data
+        
+    sample_id : str
+        Sample subdirectory under `data_path`
+        
+    hchannal : bool
+        Whether to apply binary color deconvolution to extract hematoxylin channel
+        Please refer to:
+        https://digitalslidearchive.github.io/HistomicsTK/examples/color_deconvolution.html
+        
+    Returns
+    -------
+    adata_image : np.ndarray
+        Processed histology image
+        
+    map_info : np.ndarray 
+        Spatial coords of spots (dim: [S, 2])
     """
     if hchannal:
-        adata_image = io.imread(os.path.join(data_path, sample_id, 'spatial', 'tissue_hires_image.png'))
+        adata_image = io.imread(
+            os.path.join(
+                data_path, sample_id, 'spatial', 'tissue_hires_image.png'
+            )
+        )
+        
         # adata_image = (adata_image-adata_image.min())/(adata_image.max()-adata_image.min())
         adata_image_norm = (adata_image * 255).astype(np.uint8)
         stain_color_map = htk.preprocessing.color_deconvolution.stain_color_map
@@ -468,40 +507,60 @@ def gene_for_train(adata, df_sig, verbose=True):
 
 def load_adata(data_folder, sample_id, n_genes):
     """
-    load visium adata, with raw counts, and filtered gene sets
-    input: 
-        sample_id: the folder name for the data
-        n_genes: the number of the gene for training
+    load visium adata with raw counts, preprocess & extract highly variable genes
+    
+    Parameters
+    ----------
+        data_folder : str
+            Root directory of the data
+            
+        sample_id : str
+            Sample subdirectory under `data_folder`
+
+        n_genes : int
+            the number of the gene for training
+            
+    Returns
+    -------
+        adata : sc.AnnData
+            Processed ST raw counts
+        adata_norm : sc.AnnData
+            Processed ST normalized & log-transformed data
     """
     has_feature_h5 = os.path.isfile(
         os.path.join(data_folder, sample_id, 'filtered_feature_bc_matrix.h5')
     ) # whether dataset stored in h5 with spatial info.
 
     if has_feature_h5:
-        adata_sample = sc.read_visium(path=os.path.join(data_folder, sample_id), library_id=sample_id)
-        adata_sample.var_names_make_unique()
-        adata_sample.obs['sample'] = sample_id
+        adata = sc.read_visium(path=os.path.join(data_folder, sample_id), library_id=sample_id)
+        adata.var_names_make_unique()
+        adata.obs['sample'] = sample_id
     elif sample_id.startswith('simu'): # simulations
-        adata_sample = sc.read_csv(os.path.join(data_folder, sample_id, 'counts.st_synth.csv'))
+        adata = sc.read_csv(os.path.join(data_folder, sample_id, 'counts.st_synth.csv'))
 
     else:
-        adata_sample = sc.read_h5ad(os.path.join(data_folder, sample_id, sample_id + '.h5ad'))
-        adata_sample.var_names_make_unique()
-        adata_sample.obs['sample'] = sample_id
-    adata_sample_pre = preprocess(adata_sample, n_top_genes=n_genes)
-    adata_sample = adata_sample[:, list(adata_sample_pre.var_names)]
-    adata_sample.var['highly_variable'] = adata_sample_pre.var['highly_variable']
-    adata_sample.obs = adata_sample_pre.obs
+        filenames = [
+            f[:-5] for f in os.listdir(os.path.join(data_folder, sample_id))
+            if f[-5:] == '.h5ad'
+        ]
+        assert len(filenames) == 1, "0 or >1 `h5ad` file in the data directory, please contain only 1 target ST file"        
+        adata = sc.read_h5ad(os.path.join(data_folder, sample_id, filenames[0] + '.h5ad'))
+        adata.var_names_make_unique()
+        adata.obs['sample'] = sample_id
+    adata_norm = preprocess(adata, n_top_genes=n_genes)
+    adata = adata[:, list(adata_norm.var_names)]
+    adata.var['highly_variable'] = adata_norm.var['highly_variable']
+    adata.obs = adata_norm.obs
 
-    if '_index' in adata_sample.var.columns:
-        adata_sample.var_names = adata_sample.var['_index']
+    if '_index' in adata.var.columns:
+        adata.var_names = adata.var['_index']
 
-    return adata_sample, adata_sample_pre
+    return adata, adata_norm
 
 
 def get_adata_wsig(adata_sample, gene_sig):
     """
-    to make sure gene sig in trained gene set
+    Select intersection of genes from dataset & signature annotations
     """
     variable_gene, sig_gname_filtered, sig_variable_gene_inter = gene_for_train(adata_sample, gene_sig)
     adata_sample_filter = adata_sample[:, sig_variable_gene_inter]
@@ -542,18 +601,41 @@ def filter_gene_sig(gene_sig, adata_df):
     return gene_sig
 
 
-def get_anchor_spots(adata_sample,
-                     sig_mean,
-                     v_low=20,
-                     v_high=95,
-                     n_anchor=40
-                     ):
+def get_anchor_spots(
+    adata_sample,
+    sig_mean,
+    v_low=20,
+    v_high=95,
+    n_anchor=40
+):
     """
-    input: 
-        adata_sample: anndata
-        v_low: the low threshold
-        v_high: the high threshold
-        n_anchor: number of anchor spots 
+    Calculate the top `anchor spot` enriched for the given cell type 
+    (determined by normalized expression values from each signature)
+    
+    Parameters
+    ----------
+        adata_sample: sc.Anndata
+            ST raw count 
+        
+        v_low : int
+            the low threshold to filter high-quality spots
+        
+        v_high: int
+            the high threshold to filter high-quality spots
+            
+        n_anchor: int
+            # anchor spots per cell type
+        
+    Returns
+    -------
+    pure_spots : np.ndarray
+        anchor spot indices per cell type (dim: [S, n_anchor])
+        
+    pre_dict : dict
+        Cell-type -> Anchor spots
+        
+    adata_pure : np.ndarray
+        Binary indicators of anchor spots (dim: [S, n_anchor])
     """
     highq_spots = (((adata_sample.to_df() > 0).sum(axis=1) > np.percentile((adata_sample.to_df() > 0).sum(axis=1), v_low))  &
                    ((adata_sample.to_df()).sum(axis=1) > np.percentile((adata_sample.to_df()).sum(axis=1), v_low))          &
@@ -610,6 +692,7 @@ def get_windowed_library(adata_sample, map_info, library, window_size):
     return library_n
 
 
+
 def append_sigs(gene_sig, factor, sigs, n_genes=30):
     """
     Append list of genes to a given cell type as additional signatures or 
@@ -621,21 +704,92 @@ def append_sigs(gene_sig, factor, sigs, n_genes=30):
         sigs = sigs.to_list()
     if n_genes < len(sigs):
         sigs = sigs[:n_genes]
-                  
-    """
-    if factor in gene_sig_new.columns: # Append signatures to known cell type
-        update_1 = [np.nan] * (~pd.isna(gene_sig_new[factor])).sum()
-        update_2 = [np.nan] * (gene_sig_new.shape[0] - len(update_1) - len(sigs))
-        gene_sig_new[factor].update(update_1 + sigs + update_2)          
-    else: # Adding signatures to novel cell type
-        gene_sig_new[factor] = sigs
-    """
+
     temp = set([i for i in gene_sig[factor] if str(i) != 'nan']+[i for i in sigs if str(i) != 'nan'])
     if len(temp)>gene_sig_new.shape[0]:
-        gene_sig_new = gene_sig_new.append(pd.DataFrame([[np.nan]*5]*(len(temp)-gene_sig_new.shape[0]), columns=gene_sig_new.columns), ignore_index=True)
+        gene_sig_new = gene_sig_new.append(pd.DataFrame([[np.nan]*gene_sig.shape[1]]*(len(temp)-gene_sig_new.shape[0]), columns=gene_sig_new.columns), ignore_index=True)
     else:
         temp = list(temp)+[np.nan]*(gene_sig_new.shape[0]-len(temp))
-        gene_sig_new[factor]=list(temp)
+    gene_sig_new[factor]=list(temp)#=temp
         
     return gene_sig_new
+
+
+def refine_anchors(
+    visium_args,
+    aa_model,
+    map_info, 
+    thld=0.35,
+    n_genes=5,
+    n_iters=1
+):
+    """
+    Refine anchor spots & marker genes with archetypal analysis. We append DEGs
+    computed from archetypes to their best-matched anchors followed by re-computing
+    new anchor spots
     
+    Parameters
+    ----------
+    visium_args : VisiumArgument 
+        Default parameter set for Starfysh upon dataloading
+    
+    aa_model : ArchetypalAnalysis
+        Pre-computed archetype object
+        
+    map_info : np.ndarray
+        Spatial coords of spots (dim: [S, 2])
+    
+    thld : float
+        Threshold cutoff for anchor-archetype mapping
+        
+    n_genes : int
+        # archetypal marker genes to append per refinement iteration
+        
+    Returns
+    -------
+    visimu_args : VisiumArgument
+        updated parameter set for Starfysh
+    """
+
+    gene_sig = visium_args.gene_sig.copy()
+    anchors = visium_args.get_anchors()
+    adata, adata_normed = visium_args.get_adata()
+    
+    n_cell_types = anchors.shape[1]
+    map_df, _ = aa_model.assign_archetypes(anchors) # Retract anchor-archetype mapping scores
+    markers_df = aa_model.find_markers(n_markers=50, display=False)
+    
+    for iteration in range(n_iters):
+        print('Refining round {}...'.format(iteration + 1))
+        map_used = map_df.copy()
+        
+        # (1). Update signatures
+        for i in range(gene_sig.shape[1]):
+            selected_arch = map_used.columns[map_used.loc[map_used.index[i],:]>=thld]
+            n_genes = 5
+            for j in selected_arch:
+                print('appending {0} genes in {1} to {2}...'.format(
+                    str(n_genes), j, map_used.index[i]
+                ))
+
+                gene_sig = append_sigs(
+                    gene_sig=gene_sig, 
+                    factor=map_used.index[i], 
+                    sigs=markers_df[j],
+                    n_genes=n_genes
+                )
+
+        # (2). Update anchors & re-compute anchor-archetype mapping
+        visium_args = VisiumArguments(
+            adata,
+            adata_normed,
+            gene_sig,
+            map_info,
+            n_anchors=visium_args.params['n_anchors'],
+            window_size=visium_args.params['window_size']
+        )
+        adata, adata_normed = visium_args.get_adata()
+        anchors = visium_args.get_anchors()
+        map_df, _ = aa_model.assign_archetypes(anchors)
+        
+    return visium_args
