@@ -10,21 +10,30 @@ Spatial Transcriptomics (ST / Visium) data captures gene expressions as well as 
 
 
 ## Models:
-- Semi-supervised Autoencoder
-Use spatial transcriptomics expression data & annotated signature gene sets as input; perform deconvolution and reconstructure features from the bottle neck neurons; we hope these could capture gene sets representing specific functional modules.
+- Semi-supervised learning with Auxiliary Variational Autoencoder (AVAE) for cell-type deconvolution
+- Archetypal analysis for unsupervised cell-type discovery (novel cell types) & marker gene refinement (existing annotated cell types)
+- Product-of-Experts (PoE) for H&E image integration
 
+- Input:
+  - Spatial Transcriptomics count matrix
+  - Annotated signature gene sets
+  - (Optional): paired H&E image
+  
+- Output:
+  - Spot-wise deconvolution matrix ($q_{\phi}(c)$)
+  - Low-dimensional manifold representation ($q_{\phi}(z)$)
+  - Clusterings (single-sample) / Hubs (multiple-sample integration) given the deconvolution results
+  - Co-localization networks across cell types and Spatial R-L interactions
+  - Imputated count matrix ($p(x \mid z)$)
 
 ## Directories
 ```
 .
 ├── data:           Spatial Transcritomics & synthetic simulation datasets
-├── notebooks:      Sample notebook & tutorial (to be updated)
-├── run_PoE:        Pipeline notebooks to generate pre/post-processing & analysis figures
-├── scripts:        Exploratory analysis notebooks & pipeline scripts
-├── semiVAE_all:    Combined model ( i). expression-based deconvolution; ii). expression + image (PoE) deconvolution
+├── notebooks:      Sample notebook & tutorial
 ├── simulation:     Synthetic simulation from scRNA-seq for benchmark
+├── starfysh:       Starfysh core model
 ```
-
 
 ## Installation
 (To be updated: currently only contain expression-based deconvolution model)
