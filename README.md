@@ -1,4 +1,4 @@
-<img src=https://github.com/azizilab/Starfysh/blob/main/logo.png width="500" />
+<img src=logo.png width="500" />
 
 # Spatial Transcriptomic Analysis using Reference-Free auxiliarY deep generative modeling and Shared Histology
 
@@ -20,11 +20,11 @@ Spatial Transcriptomics (ST / Visium) data captures gene expressions as well as 
   - (Optional): paired H&E image
   
 - Output:
-  - Spot-wise deconvolution matrix ($q_{\phi}(c)$)
-  - Low-dimensional manifold representation ($q_{\phi}(z)$)
+  - Spot-wise deconvolution matrix (`q(c)`)
+  - Low-dimensional manifold representation (`q(z)`)
   - Clusterings (single-sample) / Hubs (multiple-sample integration) given the deconvolution results
   - Co-localization networks across cell types and Spatial R-L interactions
-  - Imputated count matrix ($p(x \mid z)$)
+  - Imputated count matrix (`p(x)`)
 
 ## Directories
 ```
