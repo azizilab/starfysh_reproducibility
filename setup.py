@@ -1,5 +1,4 @@
 from setuptools import setup, find_packages
-import sys
 
 with open("requirements.txt", 'r') as ifile:
     requirements = ifile.read().splitlines()
@@ -7,16 +6,16 @@ with open("requirements.txt", 'r') as ifile:
 nb_requirements = [
     'nbconvert>=6.1.0',
     'nbformat>=5.1.3',
-    'notebook>=6.4.3',
+    'notebook>=6.4.11',
     'jupyter>=7.0.0',
-    'jupyterlab>=3.0.0'
+    'jupyterlab>=3.4.3'
     'ipython>=7.27.0'
 ]
 
 setup(
-    name="bcvae",
+    name="Starfysh",
     version="1.0.0",
-    description="Cell-type deconvolution for Breast Tumor Spatial Transcriptomics data",
+    description="Spatial Transcriptomic Analysis using Reference-Free auxiliarY deep generative modeling and Shared Histology",
     authors=[],
     packages=find_packages(),
     install_requires=requirements,

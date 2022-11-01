@@ -691,7 +691,7 @@ def valid_model(model):
     library = torch.log(x_valid.sum(1)).unsqueeze(1)
 
     inference_outputs =  model.inference(x_valid)
-    generative_outputs = model.generative(inference_outputs,library, gene_sig_exp_valid)
+    generative_outputs = model.generative(inference_outputs, gene_sig_exp_valid)
 
     qz_m = inference_outputs["qz_m"].detach().numpy()
     qc_m = inference_outputs["qc_m"].detach().numpy()
@@ -743,8 +743,8 @@ def train(
         library_i = library_i.to(device)
         inference_outputs = model.inference(x)
 
-        generative_outputs = model.generative(inference_outputs, x, xs_k,library_i)
-        
+        generative_outputs = model.generative(inference_outputs, xs_k)
+
         (loss,
          reconst_loss,
          kl_divergence_z,
@@ -833,7 +833,15 @@ class NegBinom(Distribution):
         return ll
     
     
-def model_eval(model,adata_sample, sig_mean, device,library_i,lib_low):
+def model_eval(
+        model,
+        adata_sample,
+        sig_mean,
+        device,
+        library_i,
+        lib_low=5.0
+):
+    lib_low = torch.exp(torch.Tensor([lib_low])).to(device)
     
     model.eval()
     library_i = torch.Tensor(library_i[:,None])
@@ -843,7 +851,7 @@ def model_eval(model,adata_sample, sig_mean, device,library_i,lib_low):
     library = torch.log(x_valid.sum(1)).unsqueeze(1)
 
     inference_outputs =  model.inference(x_valid)
-    generative_outputs = model.generative(inference_outputs,library, gene_sig_exp_valid, library_i)
+    generative_outputs = model.generative(inference_outputs, gene_sig_exp_valid)
 
     px = NegBinom(generative_outputs["px_rate"], torch.exp(generative_outputs["px_r"])).sample().detach().cpu().numpy()
     return inference_outputs, generative_outputs, px
@@ -855,8 +863,8 @@ def model_ct_exp(
     sig_mean,
     device,
     library_i,
-    lib_low,
-    ct_idx
+    ct_idx,
+    lib_low=5.0
 ):
     model.eval()
     library_i = torch.Tensor(library_i[:,None])
@@ -867,7 +875,7 @@ def model_ct_exp(
 
     inference_outputs =  model.inference(x_valid)
     inference_outputs['qz'] = inference_outputs['qz_m_ct'][:,ct_idx,:]
-    generative_outputs = model.generative(inference_outputs,library, gene_sig_exp_valid, library_i)
+    generative_outputs = model.generative(inference_outputs, gene_sig_exp_valid)
 
     px = NegBinom(generative_outputs["px_rate"], torch.exp(generative_outputs["px_r"])).sample().detach().cpu().numpy()
     return px

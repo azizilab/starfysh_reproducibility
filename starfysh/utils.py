@@ -213,7 +213,6 @@ def run_starfysh(
         model = AVAE(
             adata=adata,
             gene_sig=gene_sig,
-            alpha_min=alpha_min,
             win_loglib=win_loglib
         )
         model = model.to(device)
@@ -731,7 +730,7 @@ def refine_anchors(
     aa_model : ArchetypalAnalysis
         Pre-computed archetype object
         
-    map_info : np.ndarray
+    map_info : pd.DataFrame
         Spatial coords of spots (dim: [S, 2])
     
     thld : float
@@ -761,7 +760,6 @@ def refine_anchors(
         # (1). Update signatures
         for i in range(gene_sig.shape[1]):
             selected_arch = map_used.columns[map_used.loc[map_used.index[i],:]>=thld]
-            n_genes = 5
             for j in selected_arch:
                 print('appending {0} genes in {1} to {2}...'.format(
                     str(n_genes), j, map_used.index[i]
