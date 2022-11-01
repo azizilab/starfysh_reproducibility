@@ -4,20 +4,17 @@ import json
 import numpy as np
 import pandas as pd
 import scanpy as sc
-# import logging
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from sklearn.neighbors import NearestNeighbors
-from sklearn.linear_model import LinearRegression
 from scipy.stats import zscore
 from torch.utils.data import DataLoader
 
-import sys
-# import histomicstk as htk
+import histomicstk as htk
 from skimage import io
+
 
 # Module import
 from starfysh import LOGGER
@@ -314,8 +311,7 @@ def preprocess(
     adata_raw, 
     lognorm=True, 
     min_perc=None,
-    max_perc=None, 
-    n_top_genes=2000, 
+    n_top_genes=2000,
     mt_thld=100,
     verbose=True
 ):
@@ -330,9 +326,6 @@ def preprocess(
     min_perc : float
         lower-bound percentile of non-zero gexps for filtering spots
         
-    max_perc : float
-        upper-bound percentile of non-zero gexps for filtering spots
-        
     n_top_genes: float
         number of the variable genes
         
@@ -342,12 +335,11 @@ def preprocess(
     """
     adata = adata_raw.copy()
 
-    if min_perc and max_perc:
-        assert 0 < min_perc < max_perc < 100, \
-            "Invalid thresholds for cells: {0}, {1}".format(min_perc, max_perc)
+    if min_perc :
+        assert 0 < min_perc < 100, \
+            "Invalid thresholds for cells: {0}".format(min_perc)
         min_counts = np.percentile(adata.obs['total_counts'], min_perc)
-        max_counts = np.percentile(adata.obs['total_counts'], min_perc)
-        sc.pp.filter_cells(adata, min_counts=min_counts, max_counts=max_counts)
+        sc.pp.filter_cells(adata, min_counts=min_counts)
 
     # Remove cells with excessive MT expressions
     # Remove MT & RB genes
@@ -384,8 +376,7 @@ def preprocess(
     if verbose:
         LOGGER.info('Preprocessing4: Find the variable genes')
     sc.pp.highly_variable_genes(adata, flavor='seurat', n_top_genes=n_top_genes, inplace=True)
-    # adata.var['highly_variable']['PDCD1']=True # TODO: We need to avoid the hard-coded HVG threshold in public version
-    
+
     return adata[:, adata.var.highly_variable]
 
 
@@ -531,22 +522,26 @@ def load_adata(data_folder, sample_id, n_genes):
         os.path.join(data_folder, sample_id, 'filtered_feature_bc_matrix.h5')
     ) # whether dataset stored in h5 with spatial info.
 
-    if has_feature_h5:
-        adata = sc.read_visium(path=os.path.join(data_folder, sample_id), library_id=sample_id)
-        adata.var_names_make_unique()
-        adata.obs['sample'] = sample_id
-    elif sample_id.startswith('simu'): # simulations
+    if sample_id.startswith('simu'): # simulation
         adata = sc.read_csv(os.path.join(data_folder, sample_id, 'counts.st_synth.csv'))
-
     else:
+        st_file = 'filtered_feature_bc_matrix.h5'
         filenames = [
-            f[:-5] for f in os.listdir(os.path.join(data_folder, sample_id))
-            if f[-5:] == '.h5ad'
+            f for f in os.listdir(os.path.join(data_folder, sample_id))
+            if f[-5:] == '.h5ad' or f[-3:] == '.h5'
         ]
-        assert len(filenames) == 1, "0 or >1 `h5ad` file in the data directory, please contain only 1 target ST file"        
-        adata = sc.read_h5ad(os.path.join(data_folder, sample_id, filenames[0] + '.h5ad'))
-        adata.var_names_make_unique()
-        adata.obs['sample'] = sample_id
+        if st_file in filenames:
+            adata = sc.read_visium(
+                path=os.path.join(data_folder, sample_id),
+                library_id=sample_id
+            )
+        else:
+            assert len(filenames) == 1, "0 or >1 `h5ad file in the sample directory, please keep only 1 target ST file"
+            adata = sc.read_h5ad(os.path.join(data_folder, sample_id, filenames[0]))
+
+    adata.var_names_make_unique()
+    adata.obs['sample'] = sample_id
+
     adata_norm = preprocess(adata, n_top_genes=n_genes)
     adata = adata[:, list(adata_norm.var_names)]
     adata.var['highly_variable'] = adata_norm.var['highly_variable']
@@ -580,7 +575,7 @@ def get_sig_mean(adata_sample, gene_sig, log_lib):
                 axis=1)
         else:
             gene_sig_exp_m[gene_sig.columns[i]] = np.log(
-                (adata_sample_pre.to_df().loc[:, np.intersect1d(adata_sample_pre.var_names, np.unique(gene_sig.iloc[:, i].astype(str)))] + 1)
+                (adata_sample.to_df().loc[:, np.intersect1d(adata_sample.var_names, np.unique(gene_sig.iloc[:, i].astype(str)))] + 1)
             ).mean(axis=1)
 
     # gene_sig_exp_arr = torch.Tensor(np.array(gene_sig_exp_m))
