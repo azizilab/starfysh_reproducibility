@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """spatial_sim.ipynb
 
@@ -11,19 +12,38 @@ import os
 import os.path as osp
 import argparse as arp
 
-
 import numpy as np
 import pandas as pd
 import pymc3 as pm
-
 import scanpy as sc
 import matplotlib.pyplot as plt
 
 from scipy.io import mmread
-
 from scipy.stats import lognorm, poisson, gamma
 
-minor_dict = {
+
+# Wu et al. (2021) major cell -> subset map
+major_dict = {
+    'Cancer Epithelial': ['Cancer Basal SC', 'Cancer LumB SC'],
+    'Normal Epithelial': ['Myoepithelial'],
+    'T-cells': ['T_cells_c0_CD4+_CCR7',
+                'T_cells_c1_CD4+_IL7R',
+                'T_cells_c3_CD4+_Tfh_CXCL13',
+                'T_cells_c2_CD4+_T-regs_FOXP3',
+                'T_cells_c7_CD8+_IFNG',
+                'T_cells_c8_CD8+_LAG3'],
+    'B-cells': ['B cells Memory', 'B cells Naive'],
+    'Macrophage': ['Myeloid_c10_Macrophage_1_EGR1', 'Myeloid_c9_Macrophage_2_CXCL10'],
+    'Plasmablasts': ['Plasmablasts'],
+    'Monocytes': ['Myeloid_c8_Monocyte_2_S100A9'],
+    'Dendritic cells': ['Myeloid_c11_cDC2_CD1C', 'Myeloid_c3_cDC1_CLEC9A', 'Myeloid_c4_DCs_pDC_IRF7'],
+    'CAFs': ['CAFs MSC iCAF-like s1', 'CAFs MSC iCAF-like s2', 'CAFs myCAF like s4', 'CAFs myCAF like s5'],
+    'PVLs': ['PVL Immature s1', 'PVL Immature s2', 'PVL Differentiated s3'],
+    'Endothelial': ['Endothelial ACKR1', 'Endothelial CXCL12', 'Endothelial Lymphatic LYVE1', 'Endothelial RGS5']
+}
+
+# Wu et al. (2021) subset map -> Starfysh annotation
+subset_dict = {
     'Cancer Basal SC': 'Basal',
     'Cancer LumB SC': 'LumB',
     'Myoepithelial': 'Normal epithelial',
@@ -32,7 +52,7 @@ minor_dict = {
     'T_cells_c3_CD4+_Tfh_CXCL13': 'Tfh',
     'T_cells_c2_CD4+_T-regs_FOXP3': 'Treg',
     'T_cells_c7_CD8+_IFNG': 'Activated CD8',
-    'T_cells_c8_CD8+_LAG3': 'Activated CD8',
+    'T_cells_c8_CD8+_LAG3': 'Terminal exhaustion',
     'B cells Memory': 'B cells memory',
     'B cells Naive': 'B cells naive',
     'Myeloid_c10_Macrophage_1_EGR1': 'Macrophage M1',
@@ -42,11 +62,13 @@ minor_dict = {
     'Myeloid_c11_cDC2_CD1C': 'cDC',
     'Myeloid_c3_cDC1_CLEC9A': 'cDC',
     'Myeloid_c4_DCs_pDC_IRF7': 'pDC',
+    'CAFs MSC iCAF-like s1': 'CAFs MSC iCAF-like',
+    'CAFs MSC iCAF-like s2': 'CAFs MSC iCAF-like',
     'CAFs myCAF like s4': 'CAFs myCAF-like',
     'CAFs myCAF like s5': 'CAFs myCAF-like',
-    'PVL Differentiated s3': 'PVL differentiated',
     'PVL Immature s1': 'PVL immature',
     'PVL_Immature s2': 'PVL immature',
+    'PVL Differentiated s3': 'PVL differentiated',
     'Endothelial ACKR1': 'Endothelial',
     'Endothelial CXCL12': 'Endothelial',
     'Endothelial Lymphatic LYVE1': 'Endothelial',
@@ -57,19 +79,20 @@ minor_dict = {
 def sample(cell_type, k_cells=15, specs=None):
     """
     meta_df: metadata df with cell types
-    cell_type: e.g. minor or major
+    cell_type: e.g. subset or major
     k_cells: int k cells to be sampled
     specs: specific cell names to be sampled
     """
 
     sample = []
-    major_data = pd.read_csv("../data/major_signatures.csv").columns.values
 
     # filtering and choosing cell types to simulate
     if specs != None:
+        # TODO: convert major data loading optional (only if we sample from major cell types)
+        major_data = pd.read_csv("../data/major_signatures.csv").columns.values
         assert (isinstance(specs, list) or isinstance(specs, np.ndarray)), "Please ensure that specs is iterable"
         assert (set(np.intersect1d(major_data, specs)) == set(
-            specs) or set(np.intersect1d(minor_dict.keys(), specs)) == set(
+            specs) or set(np.intersect1d(subset_dict.keys(), specs)) == set(
             specs)), "Please ensure input cell types (specs) are valid names"
         sample = specs
 
@@ -77,7 +100,7 @@ def sample(cell_type, k_cells=15, specs=None):
         if cell_type == "major":
             sample = np.random.choice(major_data, k_cells, replace=False)
         elif cell_type == "subset":
-            sample = np.random.choice(list(minor_dict.keys()), k_cells, replace=False)
+            sample = np.random.choice(list(subset_dict.keys()), k_cells, replace=False)
         else:
             raise ValueError("Please select major or subset subtype")
 
@@ -144,7 +167,7 @@ def sample_GP(
         bw,
         x1,
         x2,
-        eta=2
+        eta=1
 ):
     """
     Sample abundances with GP
@@ -401,18 +424,17 @@ def simulate_spots(df, count_df, expr_factors, l, ratio=0.16, verbose=False):
 def simulate_signatures(ct_level, cell_types):
     if ct_level == 'major':
         sig_df = pd.read_csv('../data/major_signature.csv')
-        assert np.array_equal(np.intersect1d(cell_types, sig_df.columns), np.sort(cell_types)), \
-            "Please choose cell types from {}".format(list(sig_df.columns))
+        #assert np.array_equal(np.intersect1d(cell_types, sig_df.columns), np.sort(cell_types)), \
+        #    "Please choose cell types from {}".format(list(sig_df.columns))
         return sig_df[cell_types]
-    elif ct_level == 'minor':
+    elif ct_level == 'subset':
         # TODO: put 1013*.csv under `data` directory, load & update converted signature gene df
         sig_df = pd.read_csv('../data/bc_signatures_version_1013.csv')
-        assert np.array_equal(np.intersect1d(cell_types, list(minor_dict.keys())), np.sort(list(minor_dict.keys()))), \
-            "Please choose cell types from {}".format(list(minor_dict.keys()))
-        cell_types_sf = [minor_dict[k] for k in cell_types]
-        return sig_df[cell_types_sf]
+        #assert np.array_equal(np.intersect1d(cell_types, list(subset_dict.keys())), np.sort(list(subset_dict.keys()))), \
+        #    "Please choose cell types from {}".format(list(subset_dict.keys()))
+        return sig_df[cell_types]
     else:
-        raise ValueError('Please specify cell type hierarchy from `major` or `minor`')
+        raise ValueError('Please specify cell type hierarchy from `major` or `subset`')
         return None
 
 
@@ -422,7 +444,7 @@ def sim_driver(df_sc, adata, cell_count_df, cell_abundances_df):
 
     cap_ratio = np.median(np.log1p(libsize_st)) / np.median(np.log1p(libsize))
     cap_ratio_per_spot = cap_ratio / cell_count_df.sum(1).mean()
-    cap_ratio_per_spot
+    # cap_ratio_per_spot
 
     # Get list of expressed (non-zero) cell type for each spot
     expressed_factors = find_nonzero_cts(cell_count_df)
@@ -462,10 +484,24 @@ def main():
         required=True,
         help="sample id")
     prs.add_argument(
+        '--names',
+        type=str,
+        nargs='+',
+        default=[]
+    )
+    prs.add_argument(
         '-nc', '--n_celltypes',
         type=int,
         default=9,
         help="number of cell types to sample (n >= 9)")
+    
+    prs.add_argument(
+        '-mu', '--mean',
+        type=float,
+        required=True,
+        default=12,
+        help='Gamma mean to control density bandwitdh for GP simulation'
+    )
     prs.add_argument(
         '-ct', '--cell_type',
         type=str,
@@ -506,7 +542,8 @@ def main():
     adata_sc = sc.AnnData(
         X=cnt.T,
         obs=barcodes,
-        var=genes
+        var=genes,
+        dtype=np.float64
     )
 
     df_sc = adata_sc.to_df()
@@ -522,16 +559,25 @@ def main():
 
     adata.var_names_make_unique()
 
-    ct_names = sample(cell_type)
-    cts = [i for (i, ct) in enumerate(ct_names)]
-    cell_abundances_df, cell_count_df, proportion_df = pattern_spot(cts, ct_names)
+    # Sample cell types
+    if len(args.names) > 0:  # User-defined cell types
+        ct_names = np.intersect1d(args.names, annots)
+        assert len(ct_names) > 1, "Please input at least valid cell type to simulate"
+    else: # Random sampling
+        ct_names = sample(cell_type, args.n_celltypes)
+    cts = [i for (i, ct) in enumerate(ct_names)]  # index
+    cell_abundances_df, cell_count_df, proportion_df = pattern_spot(cts, ct_names, mean=args.mean)
 
     synth_df = sim_driver(df_sc, adata, cell_count_df, cell_abundances_df)
 
-    cell_count_df.columns = [minor_dict[c] for c in cell_count_df.columns]
-    proportion_df.columns = [minor_dict[c] for c in proportion_df.columns]
+    cell_count_df.columns = [subset_dict[c] for c in cell_count_df.columns]
+    proportion_df.columns = [subset_dict[c] for c in proportion_df.columns]
     merge_cols = lambda x: x.groupby(x.columns, axis=1).sum()
     cell_count_df, proportion_df = merge_cols(cell_count_df), merge_cols(proportion_df)
+
+    # Simulate / subsample signature
+    out_cts = proportion_df.columns # output cell types after (Wu -> Starfysh mapping)
+    sig_df = simulate_signatures(args.cell_type, out_cts)
 
     synth_df.to_csv(
         os.path.join(out_dir, 'counts.st_synth.csv'),
@@ -544,6 +590,10 @@ def main():
     proportion_df.to_csv(
         os.path.join(out_dir, 'proportions.st_synth.csv'),
         index=True
+    )
+    sig_df.to_csv(
+        os.path.join(out_dir, 'signature.st_synth.csv'),
+        index=False
     )
 
 
