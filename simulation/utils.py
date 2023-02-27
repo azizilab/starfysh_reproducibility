@@ -39,29 +39,75 @@ def bootstrap_dists(corr_df, n_iter=1000, size=10):
     return dists
 
 
-def calc_colcorr(df1, df2):
+def calc_colcorr(true_df, pred_df):
     """Calculate per-column correlations between 2 dataframes"""
-    assert len(df1.columns) == len(df2.columns), "Dataframes need to be the same to calculate per-col correlations"
+    assert len(true_df.columns) == len(pred_df.columns), "Dataframes need to be the same to calculate per-col correlations"
+    df1, df2 = true_df.copy(), pred_df.copy()
+    df1.columns, df2.columns = np.arange(df1.shape[1]), np.arange(df2.shape[1])
     corr = df1.corrwith(df2, axis=0).mean()
     return corr
 
 
-def get_best_permute(df, prop_true):
+def calc_elemcorr(y_true, y_pred):
+    assert y_true.shape[1] == y_pred.shape[1], "proprotion matrices need to be the same to calculate elementary-wise correlations"
+    ncol = y_true.shape[1]
+    xx, yy = np.meshgrid(np.arange(ncol), np.arange(ncol), indexing='ij')
+    xx, yy = xx.flatten(), yy.flatten()
+
+    get_corr = lambda i, j: pearsonr(y_true[:, i], y_pred[:, j])[0]
+    corr = np.asarray([
+        get_corr(i, j) for (i, j) in zip(xx, yy)
+    ]).reshape(ncol, -1)
+
+    return corr
+
+
+def get_best_permute(true_df, pred_df):
     """
     Calculate the best permutation to align reference-free method `factors` to ground-truth cell typess
+    """
     """
     nfactors = df.shape[1]
     best_score = -np.inf  # best overall per-column correlations so far
     best_permutation = None
     for col in itertools.permutations(df.columns, nfactors):
         prop_permuted = df[list(col)]
-        score = calc_colcorr(prop_true, prop_permuted)
+        score = calc_colcorr(prop, prop_permuted).mean()
         if score > best_score:
             best_score = score
             best_permutation = col
+            print(best_score, best_permutation)
+    """
+    # compute elem-wise correlations, fix the unique argmax
+    y_true, y_pred = true_df.values, pred_df.values
+    nfactors = y_true.shape[1]
+    corr = calc_elemcorr(y_true, y_pred)
+    align = corr.argmax(1).astype(np.int8)
 
-    df_permuted = df[list(best_permutation)]
-    return df_permuted
+    # save searching space, fix the best-mapped factors to cell types
+    uniq_idxs = [
+        i for i, v in enumerate(align)
+        if len(np.where(align == v)[0]) == 1
+    ]
+    perm_idxs = np.setdiff1d(np.arange(nfactors), uniq_idxs).astype(np.int8)
+    perm_vals = np.setdiff1d(np.arange(nfactors), align[uniq_idxs]).astype(np.int8)
+
+
+    best_score = -np.inf
+    best_perm = None
+    curr_perm = np.zeros(nfactors, dtype=np.int8)
+    curr_perm[uniq_idxs] = align[uniq_idxs]
+
+    for perm in itertools.permutations(perm_vals, len(perm_vals)):
+        curr_perm[perm_idxs] = perm
+        col_perm = pred_df.columns[curr_perm]
+        score = calc_colcorr(true_df, pred_df[col_perm])
+        if score > best_score:
+            best_score = score
+            best_perm = col_perm
+
+    pred_perm_df = pred_df[list(best_perm)]
+    return pred_perm_df
 
 
 # -----------------
@@ -71,9 +117,12 @@ def get_best_permute(df, prop_true):
 def disp_corr(y_true, y_pred,
               outdir=None,
               fontsize=5,
+              title=None,
               filename=None,
               savefig=False,
-              format='png'):
+              format='png',
+              return_corr=True
+              ):
     """
     Calculate & plot correlation of cell proportion (or absolute cell abundance)
     between ground-truth & predictions (both [S x F])
@@ -108,15 +157,16 @@ def disp_corr(y_true, y_pred,
     ax.set_xlabel('Estimated proportion')
     ax.set_ylabel('Ground truth proportion')
 
+    if title is not None:
+        ax.set_title(title+'\n'+'Distance = %.3f' % (dist2identity(corr)))
     for item in (ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(12)
-
     if savefig and (outdir is not None and filename is not None):
         if not os.path.exists(outdir):
             os.makedirs(outdir)
         fig.savefig(os.path.join(outdir, filename+'.'+format), bbox_inches='tight', format=format)
-
     plt.show()
+
 
 
 def disp_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False, format='png'):
