@@ -13,6 +13,12 @@ from scipy.stats import pearsonr, gaussian_kde
 # Benchmark metrics
 # -----------------
 
+def dist2gt(A, A_gt):
+    """
+    Calculate the distance to ground-truth correlation matrix (proportions)
+    """
+    return np.linalg.norm(A - A_gt, ord='fro')
+
 def dist2identity(A):
     """
     Calculate the distance to identity matrix
@@ -66,18 +72,6 @@ def get_best_permute(true_df, pred_df):
     """
     Calculate the best permutation to align reference-free method `factors` to ground-truth cell typess
     """
-    """
-    nfactors = df.shape[1]
-    best_score = -np.inf  # best overall per-column correlations so far
-    best_permutation = None
-    for col in itertools.permutations(df.columns, nfactors):
-        prop_permuted = df[list(col)]
-        score = calc_colcorr(prop, prop_permuted).mean()
-        if score > best_score:
-            best_score = score
-            best_permutation = col
-            print(best_score, best_permutation)
-    """
     # compute elem-wise correlations, fix the unique argmax
     y_true, y_pred = true_df.values, pred_df.values
     nfactors = y_true.shape[1]
@@ -91,7 +85,6 @@ def get_best_permute(true_df, pred_df):
     ]
     perm_idxs = np.setdiff1d(np.arange(nfactors), uniq_idxs).astype(np.int8)
     perm_vals = np.setdiff1d(np.arange(nfactors), align[uniq_idxs]).astype(np.int8)
-
 
     best_score = -np.inf
     best_perm = None
@@ -121,7 +114,7 @@ def disp_corr(y_true, y_pred,
               filename=None,
               savefig=False,
               format='png',
-              return_corr=True
+              return_corr=False
               ):
     """
     Calculate & plot correlation of cell proportion (or absolute cell abundance)
@@ -137,6 +130,7 @@ def disp_corr(y_true, y_pred,
 
     n_factors = v1.shape[1]
     corr = np.zeros((n_factors, n_factors))
+    gt_corr = y_true.corr().values
 
     for i in range(n_factors):
         for j in range(n_factors):
@@ -158,7 +152,9 @@ def disp_corr(y_true, y_pred,
     ax.set_ylabel('Ground truth proportion')
 
     if title is not None:
-        ax.set_title(title+'\n'+'Distance = %.3f' % (dist2identity(corr)))
+        # ax.set_title(title+'\n'+'Distance = %.3f' % (dist2identity(corr)))
+        ax.set_title(title+'\n'+'Distance = %.3f' % (dist2gt(corr, gt_corr)))
+        
     for item in (ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(12)
     if savefig and (outdir is not None and filename is not None):
@@ -166,6 +162,8 @@ def disp_corr(y_true, y_pred,
             os.makedirs(outdir)
         fig.savefig(os.path.join(outdir, filename+'.'+format), bbox_inches='tight', format=format)
     plt.show()
+
+    return corr if return_corr else None
 
 
 
