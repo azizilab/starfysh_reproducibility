@@ -18,61 +18,155 @@ import pymc3 as pm
 import scanpy as sc
 import matplotlib.pyplot as plt
 
+from collections import defaultdict
 from scipy.io import mmread
 from scipy.stats import lognorm, poisson, gamma
 
 
-# Wu et al. (2021) major cell -> subset map
-major_dict = {
-    'Cancer Epithelial': ['Cancer Basal SC', 'Cancer LumB SC'],
-    'Normal Epithelial': ['Myoepithelial'],
-    'T-cells': ['T_cells_c0_CD4+_CCR7',
-                'T_cells_c1_CD4+_IL7R',
-                'T_cells_c3_CD4+_Tfh_CXCL13',
-                'T_cells_c2_CD4+_T-regs_FOXP3',
-                'T_cells_c7_CD8+_IFNG',
-                'T_cells_c8_CD8+_LAG3'],
-    'B-cells': ['B cells Memory', 'B cells Naive'],
-    'Macrophage': ['Myeloid_c10_Macrophage_1_EGR1', 'Myeloid_c9_Macrophage_2_CXCL10'],
-    'Plasmablasts': ['Plasmablasts'],
-    'Monocytes': ['Myeloid_c8_Monocyte_2_S100A9'],
-    'Dendritic cells': ['Myeloid_c11_cDC2_CD1C', 'Myeloid_c3_cDC1_CLEC9A', 'Myeloid_c4_DCs_pDC_IRF7'],
-    'CAFs': ['CAFs MSC iCAF-like s1', 'CAFs MSC iCAF-like s2', 'CAFs myCAF like s4', 'CAFs myCAF like s5'],
-    'PVLs': ['PVL Immature s1', 'PVL Immature s2', 'PVL Differentiated s3'],
-    'Endothelial': ['Endothelial ACKR1', 'Endothelial CXCL12', 'Endothelial Lymphatic LYVE1', 'Endothelial RGS5']
+# --- Major cell type simulations ---
+# Wu et al. (2021) major cell type -> subset map for selected cell types
+# Select the following major cell types: CAFs, Cancer Epithelial, Myeloid (except LAM1/2), Normal Epithelial, T-cells
+major_subset_dict = {
+    'CAFs':                             ['CAFs MSC iCAF-like s1',
+                                         'CAFs MSC iCAF-like s2',
+                                         'CAFs myCAF like s4',
+                                         'CAFs myCAF like s5'],
+
+    'Cancer Epithelial':                ['Cancer Basal SC'],
+
+    'Myeloid':                          ['Myeloid_c12_Monocyte_1_IL1B',
+                                         'Myeloid_c4_DCs_pDC_IRF7',
+                                         'Myeloid_c10_Macrophage_1_EGR1',
+                                         'Myeloid_c8_Monocyte_2_S100A9',
+                                         'Myeloid_c11_cDC2_CD1C',
+                                         'Myeloid_c9_Macrophage_2_CXCL10',
+                                         'Myeloid_c3_cDC1_CLEC9A',
+                                         'Myeloid_c7_Monocyte_3_FCGR3A'],
+
+    'Normal Epithelial':                ['Luminal Progenitors', 'Mature Luminal', 'Myoepithelial'],
+
+    'T-cells':                          ['T_cells_c0_CD4+_CCR7',
+                                         'T_cells_c1_CD4+_IL7R',
+                                         'T_cells_c3_CD4+_Tfh_CXCL13',
+                                         'T_cells_c2_CD4+_T-regs_FOXP3',
+                                         'T_cells_c7_CD8+_IFNG',
+                                         'T_cells_c8_CD8+_LAG3',
+                                         'T_cells_c9_NK_cells_AREG'],
 }
 
+# subset map -> major cell type (Wu et al.)
+subset_major_dict = {
+    v: k
+    for k, v_list in major_subset_dict.items()
+    for v in v_list
+}
+
+
+# Wu et al. (2021) subset -> Starfysh annotation map for selected cell types
+subset_starfysh_dict = {
+    # CAFs
+    'CAFs MSC iCAF-like s1':            'CAFs MSC iCAF-like',
+    'CAFs MSC iCAF-like s2':            'CAFs MSC iCAF-like',
+    'CAFs myCAF like s4':               'CAFs myCAF-like',
+    'CAFs myCAF like s5':               'CAFs myCAF-like',
+
+    # Cancer Epithelial
+    'Cancer Basal SC':                  'Basal',
+
+    # Myeloid
+    'Myeloid_c12_Monocyte_1_IL1B':      'Monocytes',
+    'Myeloid_c4_DCs_pDC_IRF7':          'pDC',
+    'Myeloid_c10_Macrophage_1_EGR1':    'Macrophage M1',
+    'Myeloid_c8_Monocyte_2_S100A9':     'Monocytes',
+    'Myeloid_c11_cDC2_CD1C':            'cDC',
+    'Myeloid_c9_Macrophage_2_CXCL10':   'Macrophage M2',
+    'Myeloid_c3_cDC1_CLEC9A':           'cDC',
+    'Myeloid_c7_Monocyte_3_FCGR3A':     'Monocytes',
+
+    # Normal Epithelial
+    'Luminal Progenitors':              'Normal epithelial',
+    'Mature Luminal':                   'Normal epithelial',
+    'Myoepithelial':                    'Normal epithelial',
+
+    # T-cells
+    'T_cells_c0_CD4+_CCR7':             'Tcm',
+    'T_cells_c1_CD4+_IL7R':             'Tem',
+    'T_cells_c3_CD4+_Tfh_CXCL13':       'Tfh',
+    'T_cells_c2_CD4+_T-regs_FOXP3':     'Treg',
+    'T_cells_c7_CD8+_IFNG':             'Activated CD8',
+    'T_cells_c8_CD8+_LAG3':             'Terminal exhaustion',
+    'T_cells_c9_NK_cells_AREG':         'NK'
+}
+
+# Starfysh fine-grained annotation -> major cell type maps (CAFs, Cancer Epithelial, Myeloid, Normal Epithelial, T-cells)
+starfysh_major_dict = {
+    # CAFs
+    'CAFs MSC iCAF-like':               'CAFs',
+    'CAFs myCAF-like':                  'CAFs',
+
+    # Cancer Epithelial
+    'Basal':                            'Cancer Epithelial',
+
+    # Myeloid
+    'Monocytes':                        'Myeloid',
+    'Macrophage M1':                    'Myeloid',
+    'Macrophage M2':                    'Myeloid',
+    'cDC':                              'Myeloid',
+    'pDC':                              'Myeloid',
+
+    # Normal Epithelial
+    'Normal epithelial':                'Normal Epithelial',
+
+    # T-cells
+    'Tcm':                              'T-cells',
+    'Tem':                              'T-cells',
+    'Tfh':                              'T-cells',
+    'Treg':                             'T-cells',
+    'Activated CD8':                    'T-cells',
+    'Terminal exhaustion':              'T-cells',
+    'NK':                               'T-cells'
+}
+
+# major cell type (CAFs, Cancer Epithelial, Myeloid, Normal Epithelial, T-cells) -> Starfysh fine-grained annotation
+major_starfysh_dict = defaultdict(list)
+for k, v in starfysh_major_dict.items():
+    major_starfysh_dict[v].append(k)
+del k, v
+
+# --- Fine-grained cell type simulations ---
 # Wu et al. (2021) subset map -> Starfysh annotation
 subset_dict = {
-    'Cancer Basal SC': 'Basal',
-    'Cancer LumB SC': 'LumB',
-    'Myoepithelial': 'Normal epithelial',
-    'T_cells_c0_CD4+_CCR7': 'Tcm',
-    'T_cells_c1_CD4+_IL7R': 'Tem',
-    'T_cells_c3_CD4+_Tfh_CXCL13': 'Tfh',
-    'T_cells_c2_CD4+_T-regs_FOXP3': 'Treg',
-    'T_cells_c7_CD8+_IFNG': 'Activated CD8',
-    'T_cells_c8_CD8+_LAG3': 'Terminal exhaustion',
-    'B cells Memory': 'B cells memory',
-    'B cells Naive': 'B cells naive',
-    'Myeloid_c10_Macrophage_1_EGR1': 'Macrophage M1',
-    'Myeloid_c9_Macrophage_2_CXCL10': 'Macrophage M2',
-    'Plasmablasts': 'Plasmablasts',
-    'Myeloid_c8_Monocyte_2_S100A9': 'Monocytes',
-    'Myeloid_c11_cDC2_CD1C': 'cDC',
-    'Myeloid_c3_cDC1_CLEC9A': 'cDC',
-    'Myeloid_c4_DCs_pDC_IRF7': 'pDC',
-    'CAFs MSC iCAF-like s1': 'CAFs MSC iCAF-like',
-    'CAFs MSC iCAF-like s2': 'CAFs MSC iCAF-like',
-    'CAFs myCAF like s4': 'CAFs myCAF-like',
-    'CAFs myCAF like s5': 'CAFs myCAF-like',
-    'PVL Immature s1': 'PVL immature',
-    'PVL_Immature s2': 'PVL immature',
-    'PVL Differentiated s3': 'PVL differentiated',
-    'Endothelial ACKR1': 'Endothelial',
-    'Endothelial CXCL12': 'Endothelial',
-    'Endothelial Lymphatic LYVE1': 'Endothelial',
-    'Endothelial RGS5': 'Endothelial'
+    'Cancer Basal SC':                  'Basal',
+    'Cancer LumB SC':                   'LumB',
+    'Myoepithelial':                    'Normal epithelial',
+    'T_cells_c0_CD4+_CCR7':             'Tcm',
+    'T_cells_c1_CD4+_IL7R':             'Tem',
+    'T_cells_c3_CD4+_Tfh_CXCL13':       'Tfh',
+    'T_cells_c2_CD4+_T-regs_FOXP3':     'Treg',
+    'T_cells_c7_CD8+_IFNG':             'Activated CD8',
+    'T_cells_c8_CD8+_LAG3':             'Terminal exhaustion',
+    'B cells Memory':                   'B cells memory',
+    'B cells Naive':                    'B cells naive',
+    'Myeloid_c10_Macrophage_1_EGR1':    'Macrophage M1',
+    'Myeloid_c9_Macrophage_2_CXCL10':   'Macrophage M2',
+    'Plasmablasts':                     'Plasmablasts',
+    'Myeloid_c7_Monocyte_3_FCGR3A':     'Monocytes',
+    'Myeloid_c12_Monocyte_1_IL1B':      'Monocytes',
+    'Myeloid_c8_Monocyte_2_S100A9':     'Monocytes',
+    'Myeloid_c11_cDC2_CD1C':            'cDC',
+    'Myeloid_c3_cDC1_CLEC9A':           'cDC',
+    'Myeloid_c4_DCs_pDC_IRF7':          'pDC',
+    'CAFs MSC iCAF-like s1':            'CAFs MSC iCAF-like',
+    'CAFs MSC iCAF-like s2':            'CAFs MSC iCAF-like',
+    'CAFs myCAF like s4':               'CAFs myCAF-like',
+    'CAFs myCAF like s5':               'CAFs myCAF-like',
+    'PVL Immature s1':                  'PVL immature',
+    'PVL_Immature s2':                  'PVL immature',
+    'PVL Differentiated s3':            'PVL differentiated',
+    'Endothelial ACKR1':                'Endothelial',
+    'Endothelial CXCL12':               'Endothelial',
+    'Endothelial Lymphatic LYVE1':      'Endothelial',
+    'Endothelial RGS5':                 'Endothelial'
 }
 
 
@@ -167,7 +261,7 @@ def sample_GP(
         bw,
         x1,
         x2,
-        eta=1
+        eta=1.2
 ):
     """
     Sample abundances with GP
@@ -240,7 +334,7 @@ def get_ct_name(ct_map, idxs):
 
 
 def _random_assign(n):
-    """Random one-to-one assignemnt by permuting an NxN identity matrix"""
+    """Random one-to-one assignment by permuting an NxN identity matrix"""
     mat = np.random.permutation(np.diag(np.ones(n)))
     return mat
 
@@ -258,7 +352,9 @@ def assign_ct_pattern(cell_types, n_patterns):
 
 
 def pattern_spot(cell_types, ct_names, n_locations=[50, 50], n_experiments=1, mean=12):
-    ''' Generate per-spot spatial pattern '''
+    """ 
+    Generate per-spot spatial pattern
+    """
 
     # Generate matrix of which cell types are in which zones
     # Specify number of distinct spatial patterns under each category
@@ -267,7 +363,6 @@ def pattern_spot(cell_types, ct_names, n_locations=[50, 50], n_experiments=1, me
 
     ct_patterns_df = assign_ct_pattern(cell_types, len(cell_types))
     mean_var_ratio = 1.5
-    mean = 12  # assuming specific cell type
     bandwidth = np.random.gamma(
         mean * mean_var_ratio, 1 / mean_var_ratio,
         size=len(cell_types)
@@ -293,7 +388,7 @@ def pattern_spot(cell_types, ct_names, n_locations=[50, 50], n_experiments=1, me
     # generate per-spot spatial pattern
     cell_abundances = np.dot(abundances_df, ct_patterns_df.T)
     q_sf = np.tile(
-        np.random.lognormal(0.5, 0.5, size=len(cell_types)),
+        np.random.lognormal(2, 0.5, size=len(cell_types)),
         reps=(n_locations[0] * n_locations[1], 1),
     )
 
@@ -335,8 +430,6 @@ def find_sc_index(df, cell_type, libsize_raw, l, n_nbr=3):
     expr : list
         Gene expression of the selected scRNA-seq cell
     """
-
-    # Bug: the index in subsetted libsize different from the original count index!!!
     cell_types = np.unique(df.index.get_level_values(1))
     assert cell_type in cell_types, 'Unexpected cell type {}'.format(cell_type)
 
@@ -402,7 +495,8 @@ def simulate_spots(df, count_df, expr_factors, l, ratio=0.16, verbose=False):
             [
                 np.repeat(cell_type, count)
                 for (cell_type, count) in zip(cell_types, cell_count)
-            ])
+            ]
+        )
 
         # for count, cell_type in zip(expected_libsize, cell_type_freqs):
         for cell_type in cell_type_freqs:
@@ -422,14 +516,20 @@ def simulate_spots(df, count_df, expr_factors, l, ratio=0.16, verbose=False):
 
 
 def simulate_signatures(ct_level, cell_types):
+    sig_df = pd.read_csv('../data/bc_signatures_version_1013.csv')
     if ct_level == 'major':
-        sig_df = pd.read_csv('../data/major_signature.csv')
-        #assert np.array_equal(np.intersect1d(cell_types, sig_df.columns), np.sort(cell_types)), \
-        #    "Please choose cell types from {}".format(list(sig_df.columns))
-        return sig_df[cell_types]
+        # TODO: implement random sampling of n genes out of all candidate `starfysh` fine-grained cell type
+        # For now, concatenate ALL genes & filter during model runtime
+        sig_df_dict = {}
+        for ct in cell_types:
+            sigs_union = []
+            for sf_annot in major_starfysh_dict[ct]:
+                sigs_union.extend(sig_df[sf_annot])
+            sig_df_dict[ct] = np.unique(sigs_union)
+
+        return pd.DataFrame({k: pd.Series(v) for k, v in sig_df_dict.items()})
+
     elif ct_level == 'subset':
-        # TODO: put 1013*.csv under `data` directory, load & update converted signature gene df
-        sig_df = pd.read_csv('../data/bc_signatures_version_1013.csv')
         #assert np.array_equal(np.intersect1d(cell_types, list(subset_dict.keys())), np.sort(list(subset_dict.keys()))), \
         #    "Please choose cell types from {}".format(list(subset_dict.keys()))
         return sig_df[cell_types]
@@ -500,7 +600,7 @@ def main():
         type=float,
         required=True,
         default=12,
-        help='Gamma mean to control density bandwitdh for GP simulation'
+        help='Gamma mean to control density bandwidth for GP simulation'
     )
     prs.add_argument(
         '-ct', '--cell_type',
@@ -547,8 +647,14 @@ def main():
     )
 
     df_sc = adata_sc.to_df()
+    annots = meta_df['celltype_subset']
+    if args.cell_type == 'major':
+        # Reconstruct major annotations by filtering out
+        # rare subtype entries under each major subtype]
+        annots = annots.str.strip().replace(subset_major_dict)
+        celltype_mask = ~annots.isin(set(subset_major_dict.values()))
+        annots.loc[celltype_mask] = 'Unmapped'
 
-    annots = meta_df['celltype_' + cell_type]
     df_sc.index.name = 'Barcode'
     df_sc['cell_type'] = annots.to_list()
     df_sc.set_index('cell_type', inplace=True, append=True)
@@ -561,22 +667,26 @@ def main():
 
     # Sample cell types
     if len(args.names) > 0:  # User-defined cell types
-        ct_names = np.intersect1d(args.names, annots)
+        ct_names = np.intersect1d(args.names, np.unique(annots))
         assert len(ct_names) > 1, "Please input at least valid cell type to simulate"
-    else: # Random sampling
+    else:  # Random sampling
         ct_names = sample(cell_type, args.n_celltypes)
+
+    # Generate synthetic counts
+    merge_cols = lambda x: x.groupby(x.columns, axis=1).sum()
+
     cts = [i for (i, ct) in enumerate(ct_names)]  # index
     cell_abundances_df, cell_count_df, proportion_df = pattern_spot(cts, ct_names, mean=args.mean)
-
     synth_df = sim_driver(df_sc, adata, cell_count_df, cell_abundances_df)
 
-    cell_count_df.columns = [subset_dict[c] for c in cell_count_df.columns]
-    proportion_df.columns = [subset_dict[c] for c in proportion_df.columns]
-    merge_cols = lambda x: x.groupby(x.columns, axis=1).sum()
-    cell_count_df, proportion_df = merge_cols(cell_count_df), merge_cols(proportion_df)
+    # Rename cols from subset -> Starfysh mapped annotations
+    if args.cell_type == 'subset':
+        cell_count_df.columns = [subset_dict[c] for c in cell_count_df.columns]
+        proportion_df.columns = [subset_dict[c] for c in proportion_df.columns]
+        cell_count_df, proportion_df = merge_cols(cell_count_df), merge_cols(proportion_df)
 
-    # Simulate / subsample signature
-    out_cts = proportion_df.columns # output cell types after (Wu -> Starfysh mapping)
+    # Subset signatures
+    out_cts = proportion_df.columns  # output cell types after (Wu -> Starfysh mapping)
     sig_df = simulate_signatures(args.cell_type, out_cts)
 
     synth_df.to_csv(
@@ -595,7 +705,6 @@ def main():
         os.path.join(out_dir, 'signature.st_synth.csv'),
         index=False
     )
-
 
 if __name__ == '__main__':
     main()
