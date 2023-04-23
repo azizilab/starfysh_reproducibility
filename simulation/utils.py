@@ -185,12 +185,14 @@ def disp_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False,
     for i, ax in enumerate(axes):
         v1 = y_true_vals[:, i]
         v2 = y_pred_vals[:, i]
-        v_stacked = np.vstack([v1, v2])
         r2 = r2_score(v1, v2)
+        
+        v_stacked = np.vstack([v1, v2])
         den = gaussian_kde(v_stacked)(v_stacked)
-
         ax.scatter(v1, v2, c=den, s=1, cmap='turbo', vmax=den.max() / 3)
-
+        #sns.scatterplot(v1, v2, color='k', s=1, ax=ax)
+        #sns.kdeplot(v1, v2, levels=5, fill=True, alpha=.7, ax=ax)
+        
         ax.set_aspect('equal')
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -201,10 +203,7 @@ def disp_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False,
         ax.xaxis.set_ticks_position('bottom')
 
         ax.set_title(y_pred.columns[i])
-        if i == 0 or i == 1 or i == 2 or i == 4:
-            ax.annotate(r"$R^2$ = {:.3f}".format(r2), (0, 1), fontsize=8)
-        else:
-            ax.annotate(r"$R^2$ = {:.3f}".format(r2), (0.1, 0.9), fontsize=8)
+        ax.annotate(r"$R^2$ = {:.3f}".format(r2), (0, 1), fontsize=8)
 
         ax.set_xlim([-0.1, 1.1])
         ax.set_ylim([-0.1, 1.1])
