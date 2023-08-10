@@ -169,6 +169,33 @@ subset_dict = {
     'Endothelial RGS5':                 'Endothelial'
 }
 
+# Xenium simulation maps
+starfysh_xenium_dict = {
+    'Basal':                    'Tumor',
+    'LumA':                     'Tumor',
+    'LumB':                     'Tumor',
+    'MBC':                      'Tumor',
+    'Normal epithelial':        'Myoepi_KRT15+',
+    'Tcm':                      'CD4+_T_Cells',
+    'Tem':                      'CD4+_T_Cells',
+    'Tfh':                      'CD4+_T_Cells',
+    'Treg':                     'CD4+_T_Cells',
+    'Activated CD8':            'CD8+_T_Cells',
+    'Deletional tolerance CD8': 'CD8+_T_Cells',
+    'Dysfunc CD8':              'CD8+_T_Cells',
+    'Terminal exhaustion':      'CD8+_T_Cells',
+    'Precursor exhaustion':     'CD8+_T_Cells',
+    # 'NK': None
+    'B cells memory':           'B_Cells',
+    'B cells naive':            'B_Cells',
+    'Plasmablasts':             'B_Cells',
+    'Macrophage M1':            'Macrophages_1',
+    'Macrophage M2':            'Macrophages_2',
+    # 'MDSC': None
+    # 'Monocytes': None
+    'cDC':  None
+}
+
 
 def sample(cell_type, k_cells=15, specs=None):
     """

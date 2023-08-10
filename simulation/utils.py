@@ -19,6 +19,7 @@ def dist2gt(A, A_gt):
     """
     return np.linalg.norm(A - A_gt, ord='fro')
 
+
 def dist2identity(A):
     """
     Calculate the distance to identity matrix
@@ -34,11 +35,11 @@ def bootstrap_dists(corr_df, n_iter=1000, size=10):
     """
     size = corr_df.shape[0]
     n = min(size, size)
-    labels = corr_df.columns
+    labels = corr_df.index if corr_df.shape[0] < corr_df.shape[1] else corr_df.columns
     dists = np.zeros(n_iter)
 
     for i in range(n_iter):
-        lbl = np.random.choice(corr_df.columns, n)
+        lbl = np.random.choice(labels, n)
         A = corr_df.loc[lbl, lbl].values
         dists[i] = dist2identity(A)
 
@@ -46,16 +47,17 @@ def bootstrap_dists(corr_df, n_iter=1000, size=10):
 
 
 def calc_colcorr(true_df, pred_df):
-    """Calculate per-column correlations between 2 dataframes"""
-    assert len(true_df.columns) == len(pred_df.columns), "Dataframes need to be the same to calculate per-col correlations"
+    """Calculate per-column (cell-type) correlations between 2 dataframes"""
+    assert len(true_df.columns) == len(pred_df.columns), "Dataframes need to be the same shape to calculate per-col correlations"
     df1, df2 = true_df.copy(), pred_df.copy()
+    df2.index = df1.index
     df1.columns, df2.columns = np.arange(df1.shape[1]), np.arange(df2.shape[1])
     corr = df1.corrwith(df2, axis=0).mean()
     return corr
 
 
 def calc_elemcorr(y_true, y_pred):
-    assert y_true.shape[1] == y_pred.shape[1], "proprotion matrices need to be the same to calculate elementary-wise correlations"
+    assert y_true.shape[1] == y_pred.shape[1], "proprotion matrices need to be the same shape to calculate element-wise correlations"
     ncol = y_true.shape[1]
     xx, yy = np.meshgrid(np.arange(ncol), np.arange(ncol), indexing='ij')
     xx, yy = xx.flatten(), yy.flatten()
@@ -67,6 +69,14 @@ def calc_elemcorr(y_true, y_pred):
 
     return corr
 
+
+def calc_rmse(y_true, y_pred):
+    """Calculate per-spot RMSE between ground-truth & predicted proportions"""
+    assert y_true.shape == y_pred.shape, "proportion matrices need to be the same shape to calculate RMSE"   
+    n_cts = y_true.shape[1]
+    rmse = np.sqrt(((y_true.values-y_pred.values)**2).sum(1) / n_cts)
+    return rmse
+    
 
 def get_best_permute(true_df, pred_df):
     """
@@ -107,36 +117,38 @@ def get_best_permute(true_df, pred_df):
 # Plotting
 # -----------------
 
-def disp_corr(y_true, y_pred,
-              outdir=None,
-              fontsize=5,
-              title=None,
-              filename=None,
-              savefig=False,
-              format='png',
-              return_corr=False
-              ):
+def disp_corr(
+    y_true, y_pred,
+    outdir=None,
+    figsize=(3.2, 3.2),
+    fontsize=5,
+    title=None,
+    filename=None,
+    savefig=False,
+    format='png',
+    return_corr=False
+):
     """
     Calculate & plot correlation of cell proportion (or absolute cell abundance)
     between ground-truth & predictions (both [S x F])
     """
 
-    assert y_true.shape == y_pred.shape, 'Inconsistent dimension between ground-truth & prediction'
+    assert y_true.shape[0] == y_pred.shape[0], 'Inconsistent sample sizes between ground-truth & prediction'
     if savefig:
         assert format == 'png' or format == 'eps' or format == 'svg', "Invalid saving format"
 
     v1 = y_true.values
     v2 = y_pred.values
 
-    n_factors = v1.shape[1]
-    corr = np.zeros((n_factors, n_factors))
+    n_factor1, n_factor2 = v1.shape[1], v2.shape[1]
+    corr = np.zeros((n_factor1, n_factor2))
     gt_corr = y_true.corr().values
 
-    for i in range(n_factors):
-        for j in range(n_factors):
+    for i in range(n_factor1):
+        for j in range(n_factor2):
             corr[i, j], _ = np.round(pearsonr(v1[:, i], v2[:, j]), 3)
 
-    fig, ax = plt.subplots(1, 1, figsize=(3.2, 3.2), dpi=300)
+    fig, ax = plt.subplots(1, 1, figsize=figsize, dpi=300)
     ax = sns.heatmap(corr, annot=True,
                      cmap='RdBu_r', vmin=-1, vmax=1,
                      annot_kws={"fontsize": fontsize},
@@ -144,16 +156,15 @@ def disp_corr(y_true, y_pred,
                      ax=ax
                     )
 
-    ax.set_xticks(np.arange(n_factors)+0.5)
-    ax.set_yticks(np.arange(n_factors)+0.5)
+    ax.set_xticks(np.arange(n_factor2)+0.5)
+    ax.set_yticks(np.arange(n_factor1)+0.5)
     ax.set_xticklabels(y_pred.columns, rotation=90)
     ax.set_yticklabels(y_true.columns, rotation=0)
     ax.set_xlabel('Estimated proportion')
     ax.set_ylabel('Ground truth proportion')
 
     if title is not None:
-        # ax.set_title(title+'\n'+'Distance = %.3f' % (dist2identity(corr)))
-        ax.set_title(title+'\n'+'Distance = %.3f' % (dist2gt(corr, gt_corr)))
+        ax.set_title(title+'\n'+'RMSE = %.3f' % (calc_rmse(y_true, y_pred).mean()))
         
     for item in (ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(12)
@@ -166,12 +177,16 @@ def disp_corr(y_true, y_pred,
     return corr if return_corr else None
 
 
-
-def disp_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False, format='png'):
+def disp_prop_scatter(
+    y_true, y_pred, 
+    outdir=None, 
+    filename=None, 
+    savefig=False, 
+    format='png'
+):
     """
     Scatter plot of spot-wise proportion between ground-truth & predictions
     """
-
     assert y_true.shape == y_pred.shape, 'Inconsistent dimension between ground-truth & prediction'
     if savefig:
         assert format == 'png' or format == 'eps' or format == 'svg', "Invalid saving format"
@@ -179,19 +194,20 @@ def disp_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False,
     n_factors = y_true.shape[1]
     y_true_vals = y_true.values
     y_pred_vals = y_pred.values
+    ncols = int(np.ceil(n_factors/2))
 
-    fig, axes = plt.subplots(1, n_factors, figsize=(2 * n_factors, 2.2), dpi=300)
+    fig, (ax1, ax2) = plt.subplots(2, ncols, figsize=(2*ncols, 4.4), dpi=300)
 
-    for i, ax in enumerate(axes):
+    for i in range(n_factors):
         v1 = y_true_vals[:, i]
         v2 = y_pred_vals[:, i]
         r2 = r2_score(v1, v2)
         
         v_stacked = np.vstack([v1, v2])
         den = gaussian_kde(v_stacked)(v_stacked)
-        ax.scatter(v1, v2, c=den, s=1, cmap='turbo', vmax=den.max() / 3)
-        #sns.scatterplot(v1, v2, color='k', s=1, ax=ax)
-        #sns.kdeplot(v1, v2, levels=5, fill=True, alpha=.7, ax=ax)
+        
+        ax = ax1[i] if i < ncols else ax2[i%ncols]
+        ax.scatter(v1, v2, c=den, s=.2, cmap='turbo', vmax=den.max() / 3)
         
         ax.set_aspect('equal')
         ax.spines['right'].set_visible(False)
@@ -213,10 +229,42 @@ def disp_prop_scatter(y_true, y_pred, outdir=None, filename=None, savefig=False,
         ax.set_xlabel('Ground truth proportions')
         ax.set_ylabel('Predicted proportions')
 
+
     plt.tight_layout()
+    if savefig and (outdir is not None and filename is not None):
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+        fig.savefig(os.path.join(outdir, filename+'.'+format), bbox_inches='tight', format=format)
+        
+    plt.show()
 
 
+def disp_rmse(y_true, y_preds, labels, title=None, return_rmse=False):
+    """
+    Violinplot of per-spot RMSEs for each prediction
+    """
+    n_spots, n_cts = y_true.shape
+    rmse = np.array([
+        np.sqrt(((y_true.values-y_pred.values)**2).sum(1) / n_cts)
+        for y_pred in y_preds
+    ])
+
+    lbls = np.repeat(labels, n_spots)
+    df = pd.DataFrame({
+        'RMSE': rmses.flatten(),
+        'Method': lbls
+    })
+    
+    plt.figure(figsize=(10, 6))
+    g = sns.boxplot(x='Method', y='RMSE', data=df)
+    g.set_xticklabels(labels, rotation=45)
+    plt.suptitle(title)
+    plt.show()
+
+    return rmses if return_rmse else None
+    
 # TODO: finalize the function to re-plot supp fig.1
+
 
 """
 e.g.:

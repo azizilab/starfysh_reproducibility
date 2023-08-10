@@ -1,0 +1,161 @@
+---
+title: "run_STdeconvolve"
+output: html_document
+---
+
+
+```{r}
+library(STdeconvolve)
+library(SummarizedExperiment)
+library(zellkonverter)
+library(stats)
+```
+
+
+# TNBC spatial simulation benchmark
+### Load datasets
+```{r}
+data_path <- "../data/simu_5/"
+exp <- t(read.csv(paste0(data_path, "counts.st_synth.csv"), header = TRUE, row.names = 1))
+head(as.data.frame(exp))
+```
+
+
+```{r}
+# Construct position matrix
+pos = data.frame(
+  x = rep(seq(0, 49), each = 50),
+  y = rep(seq(0, 49), 50),
+  row.names = colnames(exp)
+)
+
+head(pos)
+```
+
+```{r}
+# Filter spots & select over-dispersed genes
+filtered_exp <- cleanCounts(counts = exp, min.lib.size = 100, min.reads = 1, min.detected = 1)
+corpus <- restrictCorpus(filtered_exp, removeAbove = 1, removeBelow = 0.05, alpha = 0.05, plot = TRUE, verbose = TRUE)
+```
+
+
+```{r}
+# Fit LDA models to find the optimal K
+n_cell_types = 5 # known for simulation
+ldas <- fitLDA(t(as.matrix(corpus)), Ks = seq(n_cell_types, n_cell_types, by = 1), plot = TRUE, verbose = TRUE)
+```
+
+
+```{r}
+optLDA <- optimalModel(models = ldas, opt = "min")
+results <- getBetaTheta(optLDA, corpus <- t(as.matrix(corpus)))
+
+deconv_prop <- results$theta
+deconv_gexp <- results$beta * 1000
+write.csv(as.data.frame(deconv_prop), "results/STDeconvolve_proportion_simu_5.csv")
+```
+
+
+### Spatial Visualization
+```{r}
+# TODO: import annotations & visualize topic distribution
+#
+#vizAllTopics(deconProp, pos,
+#             groups = annot, 
+#             group_cols = rainbow(length(levels(annot))),
+#             r=0.4)	
+#
+```
+
+
+# TNBC CID44971 benchmark
+
+```{r}
+data_path <- "../data/CID44971/"
+```
+
+### Load dataset
+```{r}
+se <- readH5AD(paste0(data_path, "CID44971.h5ad"))
+```
+
+
+```{r}
+# extract counts from `sce` S3 object
+cd <- as.matrix(se@assays@data@listData$X)
+
+# load spatial coordinates
+pos <- read.csv(paste0(data_path, "spatial/tissue_positions_list.csv"), header = FALSE, row.names = 1)
+pos <- pos[, c("V5", "V6")]
+colnames(pos) <- c("y", "x")
+```
+
+
+
+
+### Preprocessing
+```{r}
+counts <- cleanCounts(cd, min.lib.size=100, min.reads=10)
+```
+
+
+Feature selection:
+```{r}
+corpus <- restrictCorpus(counts, removeAbove=1.0, nTopOD=1000)
+```
+### Fitting with LDA
+```{r}
+seq(20, 35)
+```
+
+
+```{r}
+ldas <- fitLDA(as.matrix(corpus), Ks=seq(20, 35))
+```
+# The optimal k: 35
+```{r}
+optLDA <- optimalModel(models = ldas, opt = 35)
+results <- getBetaTheta(optLDA, corpus)
+```
+
+
+```{r}
+deconProp <- results$theta
+deconGexp <- results$beta
+#vizAllTopics(deconProp, pos, groups=ann, r=0.4, lwd = 0.1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+?read10xVisium
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

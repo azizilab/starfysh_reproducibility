@@ -1,0 +1,313 @@
+---
+title: "Benchmark with BayesPrism"
+output: html_notebook
+---
+
+---
+title: "Benchmark with BayesPrism"
+output: html_notebook
+---
+
+
+
+```{r}
+suppressWarnings(library(BayesPrism))
+```
+
+```{r}
+library(anndata)
+```
+
+
+
+
+# TNBC 5 cell-type / 10 cell-type / Real data ST benchmark
+### Load datasets
+```{r}
+# spatial dataset
+
+# 5-cell-type simulation
+#sim.path <- "data_spatial/simu_5_he/counts.st_synth.csv"
+#st.exp <- read.csv("data_spatial/simu_5_he/counts.st_synth.csv", header = TRUE, row.names = 1)
+
+# 10-cell-type simulation
+st.exp <- read.csv("../data/simu_10/counts.st_synth.csv", header = TRUE, row.names = 1)
+
+# real data
+# st.path <- "../../starfysh/data/CID44971_TNBC/CID44971_TNBC.h5ad"
+# adata.exp <- read_h5ad(st.path)
+```
+
+
+If benchmarking real data, convert `h5ad` object into dataframe with `spot` x `gene`:
+```{r}
+st.exp <- adata.exp$to_df()
+colnames(st.exp) <- adata.exp$var[['_index']]
+head(st.exp)
+```
+
+
+```{r}
+# scRNA-seq dataset
+sc.exp <- Matrix::readMM("../../starfysh/data/CID44971_TNBC/scrna/count_matrix_sparse.mtx")
+
+# Load gene names & barcodes (without header)
+gene.names = read.csv("../../starfysh/data/CID44971_TNBC/scrna/count_matrix_genes.tsv", sep = '\t', header = FALSE)$V1 
+barcodes <- read.csv("../../starfysh/data/CID44971_TNBC/scrna/count_matrix_barcodes.tsv", sep = '\t', header = FALSE)$V1
+
+sc.exp <- as.data.frame(t(as.matrix(sc.exp)))
+rownames(sc.exp) <- barcodes
+colnames(sc.exp) <- gene.names
+head(sc.exp)
+```
+
+```{r}
+# scRNA-seq annotation
+celltype.map <- c(
+    'Cancer Basal SC'=                  'Basal',
+    'Cancer LumB SC'=                   'LumB',
+    'Myoepithelial'=                    'Normal epithelial',
+    'T_cells_c0_CD4+_CCR7'=             'Tcm',
+    'T_cells_c1_CD4+_IL7R'=             'Tem',
+    'T_cells_c3_CD4+_Tfh_CXCL13'=       'Tfh',
+    'T_cells_c2_CD4+_T-regs_FOXP3'=     'Treg',
+    'T_cells_c7_CD8+_IFNG'=             'Activated CD8',
+    'T_cells_c8_CD8+_LAG3'=             'Terminal exhaustion',
+    'B cells Memory'=                   'B cells memory',
+    'B cells Naive'=                    'B cells naive',
+    'Myeloid_c10_Macrophage_1_EGR1'=    'Macrophage M1',
+    'Myeloid_c9_Macrophage_2_CXCL10'=   'Macrophage M2',
+    'Plasmablasts'=                     'Plasmablasts',
+    'Myeloid_c7_Monocyte_3_FCGR3A'=     'Monocytes',
+    'Myeloid_c12_Monocyte_1_IL1B'=      'Monocytes',
+    'Myeloid_c8_Monocyte_2_S100A9'=     'Monocytes',
+    'Myeloid_c11_cDC2_CD1C'=            'cDC',
+    'Myeloid_c3_cDC1_CLEC9A'=           'cDC',
+    'Myeloid_c4_DCs_pDC_IRF7'=          'pDC',
+    'CAFs MSC iCAF-like s1'=            'CAFs MSC iCAF-like',
+    'CAFs MSC iCAF-like s2'=            'CAFs MSC iCAF-like',
+    'CAFs myCAF like s4'=               'CAFs myCAF-like',
+    'CAFs myCAF like s5'=               'CAFs myCAF-like',
+    'PVL Immature s1'=                  'PVL immature',
+    'PVL_Immature s2'=                  'PVL immature',
+    'PVL Differentiated s3'=            'PVL differentiated',
+    'Endothelial ACKR1'=                'Endothelial',
+    'Endothelial CXCL12'=               'Endothelial',
+    'Endothelial Lymphatic LYVE1'=      'Endothelial',
+    'Endothelial RGS5'=                 'Endothelial'
+)
+
+annots.df <- read.csv("../../starfysh/data/CID44971_TNBC/scrna/metadata.csv", header = TRUE, row.names = 1)
+head(annots.df)
+
+```
+
+
+```{r}
+annots <- celltype.map[match(unlist(annots.df$celltype_subset), names(celltype.map))]
+annots.df$celltype_subset <- annots
+```
+
+
+```{r}
+table(annots.df$celltype_subset)
+```
+
+
+
+# Create cell type annotation mapping from Wu et al. to Starfysh
+
+
+
+```{r}
+is.sim = TRUE
+if (is.sim == TRUE) {
+  
+  # 5 cell-type
+  # mask <- (
+  #   annots$celltype_major == 'CAFs' | 
+  #   annots$celltype_major == 'Cancer Epithelial' | 
+  #   annots$celltype_major == 'Myeloid' | 
+  #   annots$celltype_major == 'Normal Epithelial' | 
+  #   annots$celltype_major == 'T-cells'
+  # )
+
+  # subsetting annotations & original scRNA-seq matrix
+  # annots.ss <- annots$celltype_major[mask]
+  # sc.exp <- sc.exp[mask,]
+  
+  # 10 cell-type
+  mask <- (
+    (
+      annots.df$celltype_subset == 'Activated CD8' | 
+      annots.df$celltype_subset == 'B cells memory' | 
+      annots.df$celltype_subset == 'Basal' | 
+      annots.df$celltype_subset == 'CAFs MSC iCAF-like' | 
+      annots.df$celltype_subset == 'CAFs myCAF-like' | 
+      annots.df$celltype_subset == 'Endothelial' | 
+      annots.df$celltype_subset == 'PVL immature' | 
+      annots.df$celltype_subset == 'Tcm' | 
+      annots.df$celltype_subset == 'Treg' | 
+      annots.df$celltype_subset == 'pDC'  
+    ) & (!is.na(annots.df$celltype_subset))
+  )
+  
+  # subsetting annotations & original scRNA-seq matrix
+  annots.ss <- annots.df$celltype_subset[mask]
+  sc.exp.ss <- sc.exp[which(mask),]
+
+} else {
+  # For real data, eliminate unannotated entries
+  mask <- !is.na(annots.df$celltype_subset)
+  annots.ss <- annots.df$celltype_subset[mask]
+  sc.exp.ss <- sc.exp[mask,]
+}
+```
+
+
+```{r}
+head(sc.exp.ss)
+```
+
+### BayesPrism QC matrices
+Cell type / state annotations
+
+```{r}
+plot.cor.phi(
+  input = sc.exp.ss,
+  input.labels = annots.ss,
+  min.exp = 1,
+  title = "cell state correlation",
+  cexRow = .2, cexCol = .2,
+  margin = c(2, 2)
+)
+```
+
+# Outlier gexp plots for ST & SC matrices
+```{r}
+sc.stat <- plot.scRNA.outlier(
+  input = sc.exp.ss,
+  cell.type.labels = annots.ss,
+  species = "hs",
+  return.raw = FALSE
+)
+```
+
+```{r}
+bk.stat <- plot.bulk.outlier(
+  bulk.input = st.exp,
+  sc.input = sc.exp.ss,
+  cell.type.labels = annots.ss,
+  species = "hs",
+  return.raw = TRUE
+)
+```
+
+Filter out outlier genes from scRNA-seq (including sex-chr & low-expr genes)
+```{r}
+sc.exp.filtered <- cleanup.genes(
+  input = sc.exp.ss,
+  input.type = "count.matrix",
+  species = "hs",
+  gene.group = c("Rb","Mrp","other_Rb","chrM","MALAT1","chrX","chrY"),
+  exp.cells = 5
+)
+
+dim(sc.exp.filtered)
+```
+
+Visualize concordance of gexp for different gene types:
+```{r}
+plot.bulk.vs.sc(
+  sc.input = sc.exp.filtered,
+  bulk.input = st.exp,
+)
+```
+
+Further subset with
+- protein-coding genes from scRNA-seq (as shown above)
+- DEGs for each cell type 
+```{r}
+sc.exp.filtered <- select.gene.type(sc.exp.filtered, gene.type = "protein_coding")
+
+diff.exp.stat <- get.exp.stat(
+  sc.dat = sc.exp.ss[,colSums(sc.exp>0)>3],
+  cell.type.labels = annots.ss,
+  cell.state.labels = annots.ss,
+  psuedo.count = .1,
+  cell.count.cutoff = 50,
+  n.cores = 1
+)
+
+sc.exp.filtered <- select.marker(
+  sc.dat = sc.exp.filtered,
+  stat = diff.exp.stat,
+  pval.max = .01,
+  lfc.min = .1
+)
+
+dim(sc.exp.filtered)
+```
+
+### Deconvolution
+
+Construct scRNA-seq `prism` object
+```{r}
+myPrism <- new.prism(
+  reference = sc.exp.filtered,
+  mixture = st.exp,
+  input.type = "count.matrix",
+  cell.type.labels = annots.ss,
+  cell.state.labels = annots.ss,
+  key = NULL, # treat all cell types equally, switch to see effects
+  outlier.cut = .01,
+  outlier.fraction = .1
+)
+```
+
+
+
+```{r}
+# Deconvolution
+t0 <- Sys.time()
+bp.res <- run.prism(prism = myPrism, n.cores = 4)
+t1 <- Sys.time()
+duration <- t1 - t0
+```
+
+
+```{r}
+dim(theta)
+```
+
+```{r}
+colnames(theta)
+```
+
+
+Extract deconvolution results
+```{r}
+theta <- get.fraction(
+  bp = bp.res,
+  which.theta = "final",
+  state.or.type = "type"
+)
+
+write.csv(theta, "results/Bayesprism_proportion_simu_10.csv")
+```
+
+
+```{r}
+duration
+```
+```{r}
+cat("Runtime:", as.double(duration)*60, "minutes")
+```
+
+
+
+
+
+
+
+
