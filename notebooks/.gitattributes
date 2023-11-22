@@ -1,0 +1,7 @@
+starfysh_fig1_sim.ipynb filter=lfs diff=lfs merge=lfs -text
+starfysh_fig2.ipynb filter=lfs diff=lfs merge=lfs -text
+starfysh_fig3-figure.ipynb filter=lfs diff=lfs merge=lfs -text
+starfysh_fig3.ipynb filter=lfs diff=lfs merge=lfs -text
+starfysh_fig5.ipynb filter=lfs diff=lfs merge=lfs -text
+starfysh_sig_robust_analysis.ipynb filter=lfs diff=lfs merge=lfs -text
+starfysh_archetype_validation.ipynb filter=lfs diff=lfs merge=lfs -text
