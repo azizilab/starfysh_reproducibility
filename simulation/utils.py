@@ -156,15 +156,15 @@ def disp_corr(
                      ax=ax
                     )
 
-    ax.set_xticks(np.arange(n_factor2)+0.5)
+    ax.set_xticks(np.arange(n_factor2)+0.4)
     ax.set_yticks(np.arange(n_factor1)+0.5)
-    ax.set_xticklabels(y_pred.columns, rotation=90)
-    ax.set_yticklabels(y_true.columns, rotation=0)
+    ax.set_xticklabels(y_pred.columns, rotation=45, ha='right', rotation_mode='anchor', fontsize=3)
+    ax.set_yticklabels(y_true.columns, rotation=0, fontsize=3)
     ax.set_xlabel('Estimated proportion')
     ax.set_ylabel('Ground truth proportion')
 
     if title is not None:
-        ax.set_title(title+'\n'+'RMSE = %.3f' % (calc_rmse(y_true, y_pred).mean()))
+        ax.set_title(title+'\n'+'RMSE = %.3f' % (calc_rmse(y_true, y_pred).mean()), fontsize=15)
         
     for item in (ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(12)

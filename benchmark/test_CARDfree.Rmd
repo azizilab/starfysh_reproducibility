@@ -1,0 +1,79 @@
+---
+title: "test_CARDfree"
+author: "Yinuo Jin"
+date: "8/27/2023"
+output: html_document
+---
+
+```{r}
+library(Seurat)
+library(CARD)
+```
+
+# Breast Cancer Xenium-Visium FFPE benchmark
+### Load datasets
+```{r}
+data_path <- "../data/simu_xenium/visium/"
+se <- Read10X_h5(paste0(data_path, "filtered_feature_bc_matrix.h5"), use.names = TRUE)
+```
+
+
+Filter out unannotated cell barcodes
+```{r}
+prop.df <- read.csv(paste0(data_path, "proportions.st_synth_full.csv"), header = TRUE, row.names = 1)
+head(prop.df)
+
+filtered.cnt <- se[, colnames(se) %in%  row.names(prop.df)]
+filtered.cnt <- filtered.cnt[, order(row.names(prop.df)), ] 
+filtered.cnt[1:5, 1:5]
+```
+### Load spatial coordinates
+```{r}
+pos <- read.csv(paste0(data_path, "spatial/tissue_positions_list.csv"), header = TRUE, row.names = 1)
+pos <- pos[, c("pxl_row_in_fullres", "pxl_col_in_fullres")]
+colnames(pos) <- c("x", "y")
+
+pos <- pos[row.names(pos) %in% row.names(prop.df), ]
+pos <- pos[order(row.names(pos)), ] 
+head(pos)
+```
+
+
+### Load marker list
+```{r}
+gene.sig <- read.csv(paste0(data_path, "signature.st_synth.csv"), header = TRUE, row.names = 1)
+head(gene.sig)
+
+# Convert to named list
+markerList <- lapply(gene.sig, function(col) {
+  col[col != ""]
+})
+names(markerList) <- colnames(gene.sig)
+```
+
+
+
+# CARD-free Deconvolution
+### Create object
+```{r}
+CARDfree_obj = createCARDfreeObject(
+	markerList = markerList,
+	spatial_count = filtered.cnt,
+	spatial_location = pos,
+	minCountGene = 100,
+	minCountSpot = 0) 
+```
+
+### Running CARD-free
+```{r}
+CARDfree_obj = CARD_refFree(CARDfree_obj)
+```
+
+```{r}
+res <- CARDfree_obj@Proportion_CARD
+head(res)
+```
+
+```{r}
+write.csv(as.data.frame(res), "results/CARDfree_proportion_simu_xenium.csv")
+```
